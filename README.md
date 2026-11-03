@@ -17,10 +17,17 @@
 
 ## 📸 Live Demonstrations
 
+### Accurate Question Solves
 | Free-Response / Definition (`[TYPING]`) | Multiple-Choice / Verification (`[MCQ]`) |
 |:---:|:---:|
 | ![Typing Answer](assets/demo_typing_solve.png) | ![MCQ Answer](assets/demo_mcq_solve.png) |
 | *Instantly identifies free-response questions and outputs the clean answer ready to paste.* | *Extracts the correct option letter, option text, and concise 1-sentence verification.* |
+
+### Stealth Ghost Mode & Deep Transparency
+| Seamless Desktop Integration | Ultra-Faint Floating HUD |
+|:---:|:---:|
+| ![Desktop View](assets/ghost_transparency_desktop.jpg) | ![Close-up View](assets/ghost_transparency_closeup.jpg) |
+| *Blends natively into your desktop wallpaper with zero OS chrome, zero borders, and no taskbar presence.* | *Faint, discrete text floats directly on screen (adjustable down to 3% opacity with `Ctrl + MouseWheel`).* |
 
 ---
 
@@ -34,14 +41,21 @@
   Automatically analyzes whether a question has multiple-choice options (`A, B, C, D`, radio buttons, checkboxes) or is a free-response / definition question requiring an input string.
 - **📋 Auto-Copy & 1-Click Clipboard**:
   Answers are instantly placed on your Windows system clipboard the moment they are solved. Clicking anywhere on the answer re-copies it.
-- **👻 Ghost Mode & Deep Opacity**:
-  Base transparency is 35% monochrome (adjustable from 10% to 85%), with an optional Ghost Mode that renders the background completely 100% invisible so only clean text floats over your window.
+- **👻 Ghost Mode & Deep Opacity (Down to 3%)**:
+  Base transparency is adjustable on the fly from **3% to 85%** using `Ctrl + MouseWheel` or `Ctrl + [ / ]`, with an optional Ghost Mode (`Ctrl + G`) that renders the background completely 100% invisible.
 - **🔌 Tri-Engine Multi-LLM Architecture**:
   Seamlessly switch between **Ollama (100% offline local)**, **Google Gemini (cloud speed)**, and **Alibaba Qwen (frontier reasoning)** with one click in the Settings modal (`⚙`).
 
 ---
 
 ## 🧪 Tested Models & Hardware Benchmarks
+
+> [!IMPORTANT]
+> **Answer Accuracy Depends on Your Chosen Model**:
+> The factual correctness, reasoning depth, and question comprehension depend directly on the backend engine selected:
+> - **Frontier Cloud Models (`Gemini 3.8 Flash`, `Qwen-VL-Max`)**: **Highest accuracy**. Recommended for college/university exams, complex code, multi-step math, and nuanced definitions.
+> - **Local 7B Models (`LLaVA`)**: **Good for offline use**. Strong on definitions, terminology, and standard multiple-choice questions, but runs at CPU speeds on laptops (~45–60s).
+> - **Compact Models (`Moondream`)**: **Basic captioning only**. Too lightweight for academic problem-solving; prone to echoing questions.
 
 All models below were tested directly on a real Windows workstation:
 - **Processor**: 13th Gen Intel® Core™ i5-1334U (10 cores, 12 threads)
