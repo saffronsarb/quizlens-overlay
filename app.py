@@ -47,12 +47,21 @@ class QuizOverlayApp:
             base_url=base_url
         )
 
-        # 1. Root Tkinter window: Withdrawn so it never creates a taskbar entry
+        # 1. Root Tkinter window: toolwindow + withdrawn
         self.root = tk.Tk()
+        try:
+            self.root.wm_attributes("-toolwindow", True)
+        except Exception:
+            pass
         self.root.withdraw()
 
         # 2. Main overlay: Borderless Toplevel window
         self.win = tk.Toplevel(self.root)
+        self.win.withdraw()  # Withdraw before applying styles to prevent initial taskbar registration
+        try:
+            self.win.wm_attributes("-toolwindow", True)
+        except Exception:
+            pass
         self.win.title("QuizLens Overlay")
 
         # Minimalist Neutral Palette
@@ -83,7 +92,7 @@ class QuizOverlayApp:
         self.win.overrideredirect(True)  # Borderless, no OS chrome
         self.win.attributes("-topmost", self.config.get("always_on_top", True))
 
-        # Explicitly remove from Windows Taskbar
+        # Explicitly remove from Windows Taskbar and establish root ownership
         self._hide_from_windows_taskbar()
 
         # Apply transparency
@@ -94,20 +103,69 @@ class QuizOverlayApp:
         self._bind_events()
         self._start_global_hotkeys()
 
+        # Deiconify after stealth styles and ownership are established
+        self.win.deiconify()
+        self.win.lift()
+        self.win.attributes("-topmost", self.config.get("always_on_top", True))
+        self._hide_from_windows_taskbar()
+
         # Check for API key or provider on first run
         if not self.config.get("api_key") and self.config.get("provider") != "ollama":
             self.root.after(700, self._show_first_run_hint)
 
     def _hide_from_windows_taskbar(self):
-        """Assign WS_EX_TOOLWINDOW style so window never appears on the taskbar."""
+        """
+        Permanently remove all windows from the Windows Taskbar and Alt+Tab pager.
+        Ensures:
+        1. Both root and overlay windows carry WS_EX_TOOLWINDOW and lack WS_EX_APPWINDOW.
+        2. Root window is set as the Win32 OWNER (GWLP_HWNDPARENT) of the overlay window.
+           Windows shell rules dictate that owned windows never receive a taskbar button.
+        3. SetWindowPos with SWP_FRAMECHANGED forces Windows Explorer to re-evaluate the window.
+        4. Configures SetWindowDisplayAffinity (WDA_EXCLUDEFROMCAPTURE) to hide the window
+           completely from screen recording and screenshot tools.
+        """
         try:
+            user32 = ctypes.windll.user32
+            GWL_EXSTYLE = -20
+            GWLP_HWNDPARENT = -8
+            WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_APPWINDOW = 0x00040000
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+
+            self.root.update_idletasks()
             self.win.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(self.win.winfo_id())
-            if hwnd == 0:
-                hwnd = self.win.winfo_id()
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            style = (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
-            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+
+            root_hwnd = int(self.root.wm_frame(), 16) if hasattr(self.root, "wm_frame") else self.root.winfo_id()
+            win_hwnd = int(self.win.wm_frame(), 16) if hasattr(self.win, "wm_frame") else self.win.winfo_id()
+
+            # Set WS_EX_TOOLWINDOW on hidden root window
+            if root_hwnd:
+                r_style = user32.GetWindowLongW(root_hwnd, GWL_EXSTYLE)
+                r_style = (r_style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+                user32.SetWindowLongW(root_hwnd, GWL_EXSTYLE, r_style)
+                user32.SetWindowPos(root_hwnd, 0, 0, 0, 0, 0, flags)
+
+            # Assign root as Win32 OWNER of overlay window (owned windows never appear on taskbar)
+            if win_hwnd and root_hwnd:
+                user32.SetWindowLongPtrW(win_hwnd, GWLP_HWNDPARENT, root_hwnd)
+
+            # Set WS_EX_TOOLWINDOW on overlay window
+            if win_hwnd:
+                w_style = user32.GetWindowLongW(win_hwnd, GWL_EXSTYLE)
+                w_style = (w_style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+                user32.SetWindowLongW(win_hwnd, GWL_EXSTYLE, w_style)
+                user32.SetWindowPos(win_hwnd, 0, 0, 0, 0, 0, flags)
+
+                # Exclude overlay from screen recordings and screen shares (OBS, Zoom, Discord, Meet)
+                try:
+                    user32.SetWindowDisplayAffinity(win_hwnd, 0x00000011)  # WDA_EXCLUDEFROMCAPTURE
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Taskbar removal warning: {e}")
 
@@ -400,6 +458,7 @@ class QuizOverlayApp:
         self.win.deiconify()
         self.win.lift()
         self.win.attributes("-topmost", True)
+        self._hide_from_windows_taskbar()
 
         if pil_image:
             self.lbl_status.config(text=" ⠇Thinking...")
@@ -422,6 +481,7 @@ class QuizOverlayApp:
         self.win.deiconify()
         self.win.lift()
         self.win.attributes("-topmost", True)
+        self._hide_from_windows_taskbar()
         if img:
             self.lbl_status.config(text=" ⠇Thinking...")
             self._process_image_async(img)

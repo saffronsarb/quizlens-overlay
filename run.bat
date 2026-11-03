@@ -1,11 +1,9 @@
 @echo off
-title QuizLens Overlay
 cd /d "%~dp0"
 
-echo Starting QuizLens Overlay...
-python app.py
-if errorlevel 1 (
-    echo.
-    echo Application exited with an error.
-    pause
+where pythonw >nul 2>&1
+if %errorlevel% equ 0 (
+    start "" pythonw.exe app.py
+) else (
+    start "" python.exe app.py
 )
