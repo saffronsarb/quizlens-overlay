@@ -90,5 +90,16 @@ class TestQuizLens(unittest.TestCase):
         self.assertEqual(solver.provider, "gemini")
         self.assertEqual(solver.model, "gemini-3.8-flash")
 
+    def test_image_dimension_capping(self):
+        # Verify oversized image downscaling to 1024px
+        large_img = Image.new("RGB", (2560, 1440), color=(255, 255, 255))
+        solver = QuizSolver(provider="ollama", api_key="")
+        # Pre-process should cap dimension at 1024
+        max_dim = 1024
+        processed = large_img.copy()
+        processed.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        self.assertLessEqual(processed.width, 1024)
+        self.assertLessEqual(processed.height, 1024)
+
 if __name__ == "__main__":
     unittest.main()

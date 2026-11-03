@@ -22,12 +22,13 @@ except ImportError:
     HAS_MSS = False
 
 def capture_fullscreen() -> Image.Image | None:
-    """Capture the full active screen."""
+    """Capture the full active screen across all monitors."""
     # Attempt mss first
     if HAS_MSS and mss is not None:
         try:
             with mss.MSS() as sct:
-                monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                # monitors[0] spans all monitors on virtual desktop
+                monitor = sct.monitors[0]
                 sct_img = sct.grab(monitor)
                 return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
         except Exception:
@@ -105,12 +106,27 @@ class SnipSelector:
         self.root = tk.Toplevel()
         self.root.attributes("-alpha", 0.3)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-fullscreen", True)
         self.root.config(cursor="cross")
 
-        # Capture total virtual screen width & height
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
+        # Multi-monitor DPI virtual screen handling
+        try:
+            user32 = ctypes.windll.user32
+            vx = user32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
+            vy = user32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
+            vw = user32.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
+            vh = user32.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
+            self.offset_x = int(vx)
+            self.offset_y = int(vy)
+            self.root.geometry(f"{vw}x{vh}+{vx}+{vy}")
+            self.root.overrideredirect(True)
+            screen_w = vw
+            screen_h = vh
+        except Exception:
+            self.offset_x = 0
+            self.offset_y = 0
+            self.root.attributes("-fullscreen", True)
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
 
         self.canvas = tk.Canvas(self.root, cursor="cross", bg="#111111", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
@@ -158,9 +174,14 @@ class SnipSelector:
         # Close the snip overlay window
         self.root.destroy()
 
-        if (x2 - x1) > 10 and (y2 - y1) > 10:
+        real_x1 = int(x1 + getattr(self, "offset_x", 0))
+        real_y1 = int(y1 + getattr(self, "offset_y", 0))
+        real_x2 = int(x2 + getattr(self, "offset_x", 0))
+        real_y2 = int(y2 + getattr(self, "offset_y", 0))
+
+        if (real_x2 - real_x1) > 10 and (real_y2 - real_y1) > 10:
             # Capture the selected region
-            img = capture_region((x1, y1, x2, y2))
+            img = capture_region((real_x1, real_y1, real_x2, real_y2))
             self.on_snip_complete(img)
         else:
             self.on_snip_complete(None)

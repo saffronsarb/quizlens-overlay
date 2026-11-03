@@ -69,6 +69,7 @@ class QuizOverlayApp:
         # State tracking
         self.is_ghost_mode = self.config.get("glass_mode", False)
         self.is_visible = True
+        self.is_solving = False
         self.last_answer = ""
         self.last_copy_text = ""
         self._drag_start_x = 0
@@ -388,6 +389,10 @@ class QuizOverlayApp:
 
     # --- Screen Capture ---
     def _start_snip(self):
+        if self.is_solving:
+            self.lbl_status.config(text=" ⠇Busy...")
+            self.root.after(800, lambda: self.lbl_status.config(text=" ⠇Thinking..."))
+            return
         self.win.withdraw()
         self.root.after(150, lambda: SnipSelector(self._on_snip_done))
 
@@ -400,10 +405,15 @@ class QuizOverlayApp:
             self.lbl_status.config(text=" ⠇Thinking...")
             self._process_image_async(pil_image)
         else:
+            self.is_solving = False
             p_name = self.config.get("provider", "ollama").upper()
             self.lbl_status.config(text=f" ⠇{p_name}")
 
     def _solve_fullscreen(self):
+        if self.is_solving:
+            self.lbl_status.config(text=" ⠇Busy...")
+            self.root.after(800, lambda: self.lbl_status.config(text=" ⠇Thinking..."))
+            return
         self.win.withdraw()
         self.root.after(150, self._do_fullscreen_capture)
 
@@ -416,25 +426,36 @@ class QuizOverlayApp:
             self.lbl_status.config(text=" ⠇Thinking...")
             self._process_image_async(img)
         else:
+            self.is_solving = False
             self.lbl_status.config(text=" ⠇Failed")
 
     def _solve_from_clipboard(self):
+        if self.is_solving:
+            self.lbl_status.config(text=" ⠇Busy...")
+            self.root.after(800, lambda: self.lbl_status.config(text=" ⠇Thinking..."))
+            return
         img = capture_from_clipboard()
         if img:
             self.lbl_status.config(text=" ⠇Thinking...")
             self._process_image_async(img)
         else:
+            self.is_solving = False
             self._show_error("No image in clipboard.\nPress Win+Shift+S first.")
 
     # --- Async Solver Execution ---
     def _process_image_async(self, pil_image: Image.Image):
+        self.is_solving = True
         def worker():
-            result = self.solver.solve_question(pil_image)
+            try:
+                result = self.solver.solve_question(pil_image)
+            except Exception as e:
+                result = {"success": False, "error": str(e)}
             self.root.after(0, lambda: self._on_solve_complete(result))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_solve_complete(self, result: dict):
+        self.is_solving = False
         if not result.get("success", False):
             self._show_error(result.get("error", "Error"))
             return
@@ -488,6 +509,7 @@ class QuizOverlayApp:
             print(f"Clipboard copy error: {e}")
 
     def _show_error(self, message: str):
+        self.is_solving = False
         self.lbl_status.config(text=" ⠇Error")
         self.txt_answer.config(state="normal")
         self.txt_answer.delete("1.0", "end")
