@@ -15,17 +15,12 @@
 
 ---
 
-## 📸 Screenshots & Showcase
+## 📸 Live Demonstrations
 
-| Pure Answer Focus (`[TYPING]` Solve) | MCQ Option Extraction & Justification |
+| Free-Response / Definition (`[TYPING]`) | Multiple-Choice / Verification (`[MCQ]`) |
 |:---:|:---:|
 | ![Typing Answer](assets/demo_typing_solve.png) | ![MCQ Answer](assets/demo_mcq_solve.png) |
-| *Accurately identifies free-response questions and outputs the clean answer ready to paste.* | *Extracts the correct option letter, option text, and concise 1-sentence verification.* |
-
-| Stealth Mode (Transparent HUD) | 200×200 Square Overlay |
-|:---:|:---:|
-| ![Transparent HUD](assets/hud_transparent.png) | ![Square Box](assets/hud_square.png) |
-| *Deep transparency blends with dark exam windows.* | *Zero taskbar presence with `WS_EX_TOOLWINDOW`.* |
+| *Instantly identifies free-response questions and outputs the clean answer ready to paste.* | *Extracts the correct option letter, option text, and concise 1-sentence verification.* |
 
 ---
 
