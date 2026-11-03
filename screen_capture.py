@@ -104,6 +104,10 @@ class SnipSelector:
         self.rect_id = None
 
         self.root = tk.Toplevel()
+        try:
+            self.root.wm_attributes("-toolwindow", True)
+        except Exception:
+            pass
         self.root.attributes("-alpha", 0.3)
         self.root.attributes("-topmost", True)
         self.root.config(cursor="cross")
