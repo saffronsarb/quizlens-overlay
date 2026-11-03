@@ -16,7 +16,7 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-3.8-flash",
     "model": "llama3.2-vision",
-    "opacity": 0.35,
+    "opacity": 0.18,
     "font_size": 8,
     "auto_copy": True,
     "always_on_top": True,
