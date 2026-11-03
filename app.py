@@ -111,21 +111,21 @@ class QuizOverlayApp:
             print(f"Taskbar removal warning: {e}")
 
     def _apply_transparency(self):
-        """Configure transparency: default 30-35% transparent or 100% ghost mode."""
+        """Configure transparency: default 15-20% transparent or 100% ghost mode."""
+        alpha = max(0.03, min(1.0, float(self.config.get("opacity", 0.18))))
         if self.is_ghost_mode:
             self.win.configure(bg=CHROMA_KEY)
             try:
                 self.win.wm_attributes("-transparentcolor", CHROMA_KEY)
             except Exception:
                 pass
-            self.win.attributes("-alpha", 1.0)
+            self.win.attributes("-alpha", alpha)
         else:
             try:
                 self.win.wm_attributes("-transparentcolor", "")
             except Exception:
                 pass
             self.win.configure(bg=self.COLOR_BG)
-            alpha = float(self.config.get("opacity", 0.35))
             self.win.attributes("-alpha", alpha)
 
     def _build_ui(self):
@@ -250,6 +250,10 @@ class QuizOverlayApp:
         self.context_menu.add_command(label="📋 Copy Answer (Ctrl+C)", command=self._copy_answer_to_clipboard)
         self.context_menu.add_command(label="🖥 Solve Fullscreen", command=self._solve_fullscreen)
         self.context_menu.add_separator()
+        self.context_menu.add_command(label="👻 Toggle Ghost Mode (Ctrl+G)", command=self._toggle_ghost_mode)
+        self.context_menu.add_command(label="➕ More Transparent (Ctrl+[)", command=lambda: self._adjust_opacity(-0.04))
+        self.context_menu.add_command(label="➖ Less Transparent (Ctrl+])", command=lambda: self._adjust_opacity(+0.04))
+        self.context_menu.add_separator()
         self.context_menu.add_command(label="⚙ Settings (Ollama/Qwen/Gemini)", command=self._open_settings)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="✕ Close Overlay (Esc)", command=self.quit)
@@ -262,6 +266,53 @@ class QuizOverlayApp:
         self.win.bind("<Control-c>", lambda e: self._copy_answer_to_clipboard())
         self.win.bind("<Alt-s>", lambda e: self._start_snip())
         self.win.bind("<Escape>", lambda e: self.quit())
+        self.win.bind("<Control-bracketleft>", lambda e: self._adjust_opacity(-0.04))
+        self.win.bind("<Control-bracketright>", lambda e: self._adjust_opacity(+0.04))
+        self.win.bind("<Control-g>", lambda e: self._toggle_ghost_mode())
+
+        # Mouse wheel + Ctrl on any widget to adjust transparency on the fly
+        for w in (self.win, self.container, self.header_frame, self.txt_answer, self.bottom_bar):
+            w.bind("<Control-MouseWheel>", self._on_ctrl_wheel)
+
+    def _adjust_opacity(self, delta: float):
+        cur = float(self.config.get("opacity", 0.18))
+        new_val = max(0.03, min(0.90, round(cur + delta, 2)))
+        self.config["opacity"] = new_val
+        self._apply_transparency()
+        save_config(self.config)
+        self.lbl_status.config(text=f" ⠇{int(new_val * 100)}%")
+        p_name = self.config.get("provider", "ollama").upper()
+        self.root.after(1200, lambda: self.lbl_status.config(text=f" ⠇{p_name}"))
+
+    def _on_ctrl_wheel(self, event):
+        delta = 0.04 if event.delta > 0 else -0.04
+        self._adjust_opacity(delta)
+        return "break"
+
+    def _toggle_ghost_mode(self):
+        self.is_ghost_mode = not self.is_ghost_mode
+        self.config["glass_mode"] = self.is_ghost_mode
+        save_config(self.config)
+        self._apply_transparency()
+
+        bg_color = CHROMA_KEY if self.is_ghost_mode else self.COLOR_BG
+        header_color = CHROMA_KEY if self.is_ghost_mode else self.COLOR_HEADER
+        surface_color = CHROMA_KEY if self.is_ghost_mode else self.COLOR_SURFACE
+
+        self.container.config(bg=bg_color)
+        self.header_frame.config(bg=header_color)
+        self.lbl_status.config(bg=header_color)
+        self.btn_close.config(bg=header_color)
+        self.btn_settings.config(bg=header_color)
+        self.btn_copy.config(bg=header_color)
+        self.btn_snip.config(bg=header_color)
+        self.txt_answer.config(bg=surface_color)
+        self.bottom_bar.config(bg=surface_color)
+        self.grip.config(bg=surface_color)
+        status_txt = "Ghost ON" if self.is_ghost_mode else "Ghost OFF"
+        self.lbl_status.config(text=f" ⠇{status_txt}")
+        p_name = self.config.get("provider", "ollama").upper()
+        self.root.after(1200, lambda: self.lbl_status.config(text=f" ⠇{p_name}"))
 
     def _show_context_menu(self, event):
         self.context_menu.tk_popup(event.x_root, event.y_root)
@@ -649,7 +700,7 @@ class SettingsDialog:
             bg="#18181B", fg="#A1A1AA", font=("Segoe UI", 8)
         ).pack(anchor="w", padx=16, pady=(2, 2))
 
-        self.opacity_var = tk.IntVar(value=int(self.config.get("opacity", 0.35) * 100))
+        self.opacity_var = tk.IntVar(value=int(self.config.get("opacity", 0.18) * 100))
         op_frame = tk.Frame(self.win, bg="#18181B")
         op_frame.pack(fill="x", padx=16, pady=(0, 4))
 
@@ -657,7 +708,7 @@ class SettingsDialog:
         self.lbl_opacity.pack(side="right")
 
         self.scale_opacity = tk.Scale(
-            op_frame, from_=10, to=85, orient="horizontal",
+            op_frame, from_=3, to=85, orient="horizontal",
             variable=self.opacity_var, showvalue=False,
             bg="#18181B", highlightthickness=0, troughcolor="#27272A",
             activebackground="#A1A1AA", sliderrelief="flat",
