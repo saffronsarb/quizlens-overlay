@@ -6,10 +6,11 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=flat&logo=windows&logoColor=white)
 ![AI Providers](https://img.shields.io/badge/Engines-Ollama%20%7C%20Gemini%20%7C%20Qwen-6366F1?style=flat)
 ![Stealth](https://img.shields.io/badge/UI-Ghost%20HUD%20(No%20Taskbar)-10B981?style=flat)
+![Screen Invisibility](https://img.shields.io/badge/Protection-WDA__EXCLUDEFROMCAPTURE-8B5CF6?style=flat)
 
 **An ultra-minimalist, transparent desktop HUD designed to overlay quiz questions, instantly classify MCQ vs. Free-response (Typing), extract the correct answer, and auto-copy it to your clipboard.**
 
-[Features](#-key-features) • [Screenshots](#-screenshots--showcase) • [Tested Models](#-tested-models--hardware-benchmarks) • [Installation](#-installation--prerequisites) • [Usage](#-usage--shortcuts) • [Roadmap](#-what-to-do-next-roadmap)
+[Features](#-key-features) • [Screenshots](#-live-demonstrations) • [Tested Models](#-tested-models--hardware-benchmarks) • [Installation](#-installation--prerequisites) • [Usage](#-usage--shortcuts) • [Technical Docs](TASKBAR_STEALTH_DOC.md) • [Roadmap](#-what-to-do-next-roadmap)
 
 </div>
 
@@ -35,8 +36,10 @@
 
 - **🔲 Minimalist 200×200 Square HUD**:
   Floating compact box that occupies under 5% of your screen estate, keeping 95% of its area reserved for the answer.
-- **👁️ Taskbar-Invisible (True Stealth)**:
-  Uses Windows Win32 API `WS_EX_TOOLWINDOW` to completely omit the application icon from the Windows Taskbar and Alt+Tab pager.
+- **👁️ Taskbar & Alt+Tab Invisible (True Stealth)**:
+  Uses Win32 owner hierarchy (`GWLP_HWNDPARENT = -8`) and `WS_EX_TOOLWINDOW` to completely omit the application from the Windows Taskbar and Alt+Tab switcher.
+- **🛡️ Screen Capture Invisibility (`WDA_EXCLUDEFROMCAPTURE`)**:
+  Leverages Windows native display affinity (`0x00000011`) so the HUD is **completely invisible to screen recorders, screen shares, and screenshot audits** (OBS, Discord, Zoom, Microsoft Teams, Google Meet, and browser tab captures).
 - **🧠 MCQ vs. Typing Auto-Differentiation**:
   Automatically analyzes whether a question has multiple-choice options (`A, B, C, D`, radio buttons, checkboxes) or is a free-response / definition question requiring an input string.
 - **📋 Auto-Copy & 1-Click Clipboard**:
@@ -64,8 +67,8 @@ All models below were tested directly on a real Windows workstation:
 
 | Model | Provider | Status | Benchmark & Analysis |
 |---|---|---|---|
-| **`llava:latest` (4.7 GB)** | **Ollama (Local)** | **✅ Recommended (Local)** | **Highest accuracy for local offline use.** Correctly distinguishes MCQ vs. Typing, follows strict JSON schemas, and outputs clean answers. Execution on CPU takes ~45–60s per question. |
 | **`gemini-3.8-flash`** | **Google Gemini (Cloud)** | **⚡ Recommended (Speed)** | **Sub-second latency (~0.8s)**. World-class accuracy on university assessments, zero CPU or battery impact, perfect JSON adherence. |
+| **`llava:latest` (4.7 GB)** | **Ollama (Local)** | **✅ Recommended (Local)** | **Highest accuracy for local offline use.** Correctly distinguishes MCQ vs. Typing, follows strict JSON schemas, and outputs clean answers. Execution on CPU takes ~45–60s per question. |
 | **`qwen-vl-max`** | **Alibaba Qwen (Cloud)** | **✅ Supported** | Excellent OCR accuracy on complex diagrams, code snippets, and mathematical formulas via DashScope API. |
 | **`moondream:latest` (1.7 GB)** | **Ollama (Local)** | **⚠️ Limited** | Fast on CPU (~3s), but restricted to basic image captioning. Fails at structured exam logic and often re-echoes the question. |
 | **`llama3.2-vision` (7.8 GB)** | **Ollama (Local)** | **❌ Incompatible (CPU)** | Fails with `unknown model architecture: 'mllama'`. Ollama's Windows CPU runner currently lacks CPU kernel support for the `mllama` vision architecture. |
@@ -97,28 +100,31 @@ pip install -r requirements.txt
 
 ### Launching the Application
 
-- **Headless Stealth Mode (No Command Prompt Window)**:
-  Double-click [**`run_silent.bat`**](file:///run_silent.bat) (runs silently in the background via `pythonw.exe`).
-- **Standard Mode (With Console)**:
-  Double-click [**`run.bat`**](file:///run.bat).
+- **Default Stealth Mode (No Taskbar, No Command Prompt Window)**:
+  Double-click **`run.bat`** or **`run_silent.bat`** (both launch detached via `pythonw.exe` with zero console presence).
+- **Debug / Developer Mode (With Console Logs)**:
+  Double-click **`run_debug.bat`** to view real-time API logs, response times, and debug output.
 
-### Keyboard Shortcuts
+### Keyboard & Mouse Shortcuts
 
 | Shortcut | Action | Description |
 |---|---|---|
 | **`Alt+S`** or `Ctrl+Alt+S` | **Snip Region** | Freezes screen to drag a rectangle over any question. |
 | **`Ctrl+V`** or `Ctrl+Alt+V` | **Clipboard Solve** | Solves image directly from clipboard (e.g. after pressing `Win+Shift+S`). |
-| **`Alt+F`** or `Ctrl+Alt+F` | **Fullscreen Solve** | Instantly captures entire screen and solves question. |
+| **`Alt+F`** or `Ctrl+Alt+F` | **Fullscreen Solve** | Instantly captures entire multi-monitor screen and solves question. |
+| **`Ctrl + MouseWheel`** | **Live Opacity** | Scroll up/down to smoothly adjust HUD transparency between 3% and 90%. |
+| **`Ctrl + [` / `Ctrl + ]`** | **Fine Opacity Step** | Step transparency up or down by 4% increments. |
+| **`Ctrl + G`** | **Toggle Ghost Mode** | Toggles 100% invisible chroma-keyed background (text floats naked on screen). |
 | **`Click on Answer`** | **One-Click Copy** | Copies the cleanest answer string back to clipboard. |
 | **`Ctrl+Alt+H`** | **Boss-Key Toggle** | Instantly hides or shows the overlay window. |
-| **`Right-Click`** | **Context Menu** | Opens quick menu for Settings, Snip, Copy, or Exit. |
+| **`Right-Click`** | **Context Menu** | Opens quick menu for Settings, Snip, Copy, Opacity, or Exit. |
 | **`Esc`** or **`✕`** | **Close HUD** | Safely saves window coordinates and closes. |
 
 ---
 
 ## ⚙️ Configuration (`config.json`)
 
-Settings can be changed visually through the **⚙ (Gear)** dialog, or edited manually in [`config.json`](file:///config.json):
+Settings can be changed visually through the **⚙ (Gear)** dialog, or edited manually in `config.json`:
 
 ```json
 {
@@ -130,7 +136,7 @@ Settings can be changed visually through the **⚙ (Gear)** dialog, or edited ma
   "qwen_model": "qwen-vl-max",
   "gemini_model": "gemini-3.8-flash",
   "model": "llava",
-  "opacity": 0.35,
+  "opacity": 0.18,
   "font_size": 8,
   "auto_copy": true,
   "always_on_top": true,
@@ -145,13 +151,22 @@ Settings can be changed visually through the **⚙ (Gear)** dialog, or edited ma
 
 ---
 
+## 📚 Technical Documentation
+
+For deep technical insights into how QuizLens achieves true Windows stealth, eliminates taskbar buttons, and bypasses screen recorders:
+- 📖 [**Taskbar Stealth & Win32 Architecture Report (TASKBAR_STEALTH_DOC.md)**](TASKBAR_STEALTH_DOC.md)
+
+---
+
 ## 🗺️ What to Do Next (Roadmap)
 
-- [ ] **Local Fast OCR Pipeline**: Integrate Tesseract / RapidOCR to extract question text locally before passing to language-only models (reducing local CPU solve time from 50s to ~2s).
-- [ ] **System Tray Integration**: Add a system tray icon with quick toggle, profile switcher, and hotkey binder.
-- [ ] **History & Log Export**: Optional export of question-and-answer pairs into Markdown or CSV study guides.
-- [ ] **Multi-Monitor Coordinate Fixes**: Enhanced DPI coordinate translation across mixed-DPI multi-monitor gaming/testing rigs.
-- [ ] **Whisper Speech Mode**: Auto-listen for voice quizzes and oral exams.
+- [x] **Multi-Monitor Virtual Screen Bounds**: Win32 virtual desktop geometry translation across multi-display setups.
+- [x] **True Taskbar Omission**: Win32 parent-ownership hierarchy and `SWP_FRAMECHANGED` shell flushing.
+- [x] **Screen Capture Invisibility**: Integrated `WDA_EXCLUDEFROMCAPTURE` (Windows 10 2004+).
+- [ ] **Click-Through Mode (`WS_EX_TRANSPARENT`)**: Pass mouse clicks directly through the overlay to underlying buttons.
+- [ ] **Answer History Stack (`Ctrl+←` / `Ctrl+→`)**: Cycle through the last 10 solved questions and answers.
+- [ ] **Automatic Cloud-to-Local Fallback**: Automatically failover from Gemini/Qwen to local Ollama on network or rate limit errors.
+- [ ] **Local Fast OCR Pipeline**: Extract question text with local OCR before language-only models to cut solve latency.
 
 ---
 
