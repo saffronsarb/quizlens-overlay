@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 import ctypes
+from ctypes import wintypes
+import time
 
 # Ensure local modules can always be imported regardless of execution working directory
 CURRENT_DIR = str(Path(__file__).parent.resolve())
@@ -9,7 +11,6 @@ if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
 import threading
-import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image
@@ -34,6 +35,56 @@ WS_EX_APPWINDOW = 0x00040000
 # Color key for 100% ghost transparency on Windows
 CHROMA_KEY = "#000001"
 
+def set_windows_clipboard(text: str) -> bool:
+    """Set Windows system clipboard directly via Win32 API for rock-solid reliability across all apps."""
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+        kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.EmptyClipboard.restype = wintypes.BOOL
+        user32.SetClipboardData.restype = wintypes.HANDLE
+        user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        user32.CloseClipboard.restype = wintypes.BOOL
+
+        GMEM_MOVEABLE = 0x0002
+        CF_UNICODETEXT = 13
+
+        opened = False
+        for _ in range(10):
+            if user32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.01)
+        if not opened:
+            return False
+
+        try:
+            user32.EmptyClipboard()
+            encoded = text.encode("utf-16le") + b"\x00\x00"
+            h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+            if not h_mem:
+                return False
+            ptr = kernel32.GlobalLock(h_mem)
+            if not ptr:
+                kernel32.GlobalFree(h_mem)
+                return False
+            ctypes.memmove(ptr, encoded, len(encoded))
+            kernel32.GlobalUnlock(h_mem)
+            user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+            return True
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return False
+
 class QuizOverlayApp:
     def __init__(self):
         self.config = load_config()
@@ -52,6 +103,10 @@ class QuizOverlayApp:
             fallback_model=fallback_model,
             fallback_base_url=fallback_base_url
         )
+
+        # Asynchronously ensure local Ollama is active if configured or used as fallback
+        if provider == "ollama" or enable_fallback:
+            threading.Thread(target=self.solver._ensure_ollama_running, daemon=True).start()
 
         # 1. Root Tkinter window: toolwindow + withdrawn
         self.root = tk.Tk()
@@ -88,6 +143,8 @@ class QuizOverlayApp:
         self.is_solving = False
         self.last_answer = ""
         self.last_copy_text = ""
+        self.last_explanation = ""
+        self.last_full_text = ""
         self.history = []
         self.history_index = -1
         self._drag_start_x = 0
@@ -246,13 +303,18 @@ class QuizOverlayApp:
         self.btn_settings.pack(side="right")
         self.btn_settings.bind("<Button-1>", lambda e: self._open_settings())
 
-        # 📋 Quick Copy
+        # 📋 Quick Copy:
+        # Left-click: Always copy ENTIRE result (both paragraphs: Answer + Explanation)
+        # Right-click: Copy Answer only (1st paragraph)
+        # Middle-click: Copy Explanation only (2nd paragraph)
         self.btn_copy = tk.Label(
             self.header_frame, text="📋", bg=header_color, fg=self.COLOR_MUTED,
             font=("Segoe UI", 7), cursor="hand2", padx=3
         )
         self.btn_copy.pack(side="right")
-        self.btn_copy.bind("<Button-1>", lambda e: self._copy_answer_to_clipboard())
+        self.btn_copy.bind("<Button-1>", lambda e: self._copy_entire_output_to_clipboard())
+        self.btn_copy.bind("<Button-2>", lambda e: self._copy_explanation_to_clipboard())
+        self.btn_copy.bind("<Button-3>", lambda e: self._copy_answer_to_clipboard())
         self.btn_copy.bind("<Enter>", lambda e: self.btn_copy.config(fg="#FFFFFF"))
         self.btn_copy.bind("<Leave>", lambda e: self.btn_copy.config(fg=self.COLOR_MUTED))
 
@@ -266,7 +328,7 @@ class QuizOverlayApp:
         self.btn_snip.bind("<Enter>", lambda e: self.btn_snip.config(fg="#FFFFFF"))
         self.btn_snip.bind("<Leave>", lambda e: self.btn_snip.config(fg=self.COLOR_TEXT_DIM))
 
-        # PURE ANSWER AREA (Fills the entire rest of the square)
+        # PURE ANSWER AREA (Fills the entire rest of the square, fully selectable)
         current_font_size = self.config.get("font_size", 8)
         self.txt_answer = tk.Text(
             self.container,
@@ -274,20 +336,48 @@ class QuizOverlayApp:
             bg=surface_color,
             fg=self.COLOR_TEXT,
             insertbackground="#FFFFFF",
+            selectbackground="#2563EB",
+            selectforeground="#FFFFFF",
             font=("Consolas", current_font_size, "bold"),
             relief="flat",
             bd=0,
             highlightthickness=0,
             padx=6,
             pady=4,
-            cursor="hand2"
+            cursor="xterm"
         )
         self.txt_answer.pack(fill="both", expand=True)
         self.txt_answer.insert("1.0", f"[{provider_name} Ready]\nPress Alt+S to snip\nor click ✂")
-        self.txt_answer.config(state="disabled")
 
-        # Click anywhere on answer to copy immediately!
-        self.txt_answer.bind("<Button-1>", lambda e: self._copy_answer_to_clipboard())
+        # Read-only behavior: allow selection, navigation, and all window shortcuts (Ctrl/Alt), but block typing
+        def _on_txt_key(event):
+            # 1. Let all Control key combinations pass through to trigger window shortcuts
+            if event.state & 4:
+                k = event.keysym.lower()
+                if k == 'a':
+                    self.txt_answer.tag_add("sel", "1.0", "end")
+                    return "break"
+                if k == 'c':
+                    self._copy_selection_or_full()
+                    return "break"
+                # For all other Ctrl shortcuts (Ctrl+[, Ctrl+], Ctrl+G, Ctrl+T, Ctrl++, Ctrl+-, Ctrl+0, etc.)
+                return None
+
+            # 2. Let all Alt key combinations (Alt+S) pass through
+            if event.state & 8 or event.state & 0x20000 or event.keysym.startswith("Alt"):
+                return None
+
+            # 3. Allow navigation keys and Escape
+            if event.keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End', 'Prior', 'Next', 'Escape', 'Tab'):
+                return None
+
+            # 4. Block typing of letters, numbers, spaces, BackSpace, Delete, Return
+            return "break"
+
+        self.txt_answer.bind("<Key>", _on_txt_key)
+        self.txt_answer.bind("<<Paste>>", lambda e: "break")
+        self.txt_answer.bind("<<Clear>>", lambda e: "break")
+        self.txt_answer.bind("<<Cut>>", lambda e: (self._copy_selection_or_full(), "break")[1])
 
         # Micro bottom bar with resize grip (Height 12px)
         self.bottom_bar = tk.Frame(self.container, bg=surface_color, height=12)
@@ -315,7 +405,12 @@ class QuizOverlayApp:
         self.context_menu = tk.Menu(self.win, tearoff=0, bg=self.COLOR_SURFACE, fg=self.COLOR_TEXT)
         self.context_menu.add_command(label="✂ Snip Question (Alt+S)", command=self._start_snip)
         self.context_menu.add_command(label="📋 Paste from Clipboard (Ctrl+V)", command=self._solve_from_clipboard)
-        self.context_menu.add_command(label="📋 Copy Answer (Ctrl+C)", command=self._copy_answer_to_clipboard)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="📑 Copy Entire Text (Ctrl+C / 📋)", command=self._copy_entire_output_to_clipboard)
+        self.context_menu.add_command(label="📄 Copy Answer Only (1st Paragraph) (Ctrl+1)", command=self._copy_answer_to_clipboard)
+        self.context_menu.add_command(label="📄 Copy Explanation Only (2nd Paragraph) (Ctrl+2)", command=self._copy_explanation_to_clipboard)
+        self.context_menu.add_command(label="✂ Copy Selection (if highlighted)", command=self._copy_selection_or_full)
+        self.context_menu.add_separator()
         self.context_menu.add_command(label="🖥 Solve Fullscreen", command=self._solve_fullscreen)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="◀ Previous Answer (Ctrl+←)", command=self._history_prev)
@@ -336,36 +431,63 @@ class QuizOverlayApp:
         for widget in (self.win, self.container, self.header_frame, self.txt_answer, self.bottom_bar):
             widget.bind("<Button-3>", self._show_context_menu)
 
-        # Shortcuts
-        self.win.bind("<Control-v>", lambda e: self._solve_from_clipboard())
-        self.win.bind("<Control-c>", lambda e: self._copy_answer_to_clipboard())
-        self.win.bind("<Alt-s>", lambda e: self._start_snip())
-        self.win.bind("<Escape>", lambda e: self.quit())
-        self.win.bind("<Control-bracketleft>", lambda e: self._adjust_opacity(-0.04))
-        self.win.bind("<Control-bracketright>", lambda e: self._adjust_opacity(+0.04))
-        self.win.bind("<Control-g>", lambda e: self._toggle_ghost_mode())
+        # Ensure clicking anywhere on the overlay immediately focuses the window for instant keyboard shortcut response
+        for widget in (self.win, self.container, self.header_frame, self.lbl_status, self.bottom_bar):
+            widget.bind("<Button-1>", lambda e: self.win.focus_force(), add="+")
 
-        # History Navigation shortcuts
-        self.win.bind("<Control-Left>", lambda e: self._history_prev())
-        self.win.bind("<Control-Right>", lambda e: self._history_next())
+        # Shortcuts helper: execute action and return "break" to halt bubbling so no shortcut runs twice
+        def _wrap(fn):
+            def handler(e=None):
+                fn()
+                return "break"
+            return handler
 
-        # Font Scaling shortcuts
-        self.win.bind("<Control-plus>", lambda e: self._adjust_font_size(+1))
-        self.win.bind("<Control-equal>", lambda e: self._adjust_font_size(+1))
-        self.win.bind("<Control-minus>", lambda e: self._adjust_font_size(-1))
-        self.win.bind("<Control-underscore>", lambda e: self._adjust_font_size(-1))
-        self.win.bind("<Control-0>", lambda e: self._reset_font_size())
+        shortcuts = {
+            "<Control-v>": _wrap(self._solve_from_clipboard),
+            "<Control-V>": _wrap(self._solve_from_clipboard),
+            "<Control-c>": _wrap(self._copy_selection_or_full),
+            "<Control-C>": _wrap(self._copy_selection_or_full),
+            "<Control-Shift-c>": _wrap(self._copy_entire_output_to_clipboard),
+            "<Control-Shift-C>": _wrap(self._copy_entire_output_to_clipboard),
+            "<Control-Key-1>": _wrap(self._copy_answer_to_clipboard),
+            "<Control-Key-2>": _wrap(self._copy_explanation_to_clipboard),
+            "<Control-1>": _wrap(self._copy_answer_to_clipboard),
+            "<Control-2>": _wrap(self._copy_explanation_to_clipboard),
+            "<Control-e>": _wrap(self._copy_explanation_to_clipboard),
+            "<Control-E>": _wrap(self._copy_explanation_to_clipboard),
+            "<Alt-s>": _wrap(self._start_snip),
+            "<Alt-S>": _wrap(self._start_snip),
+            "<Escape>": _wrap(self.quit),
+            "<Control-bracketleft>": _wrap(lambda: self._adjust_opacity(-0.04)),
+            "<Control-bracketright>": _wrap(lambda: self._adjust_opacity(+0.04)),
+            "<Control-g>": _wrap(self._toggle_ghost_mode),
+            "<Control-G>": _wrap(self._toggle_ghost_mode),
+            "<Control-Left>": _wrap(self._history_prev),
+            "<Control-Right>": _wrap(self._history_next),
+            "<Control-plus>": _wrap(lambda: self._adjust_font_size(+1)),
+            "<Control-equal>": _wrap(lambda: self._adjust_font_size(+1)),
+            "<Control-minus>": _wrap(lambda: self._adjust_font_size(-1)),
+            "<Control-underscore>": _wrap(lambda: self._adjust_font_size(-1)),
+            "<Control-0>": _wrap(self._reset_font_size),
+            "<Control-Key-0>": _wrap(self._reset_font_size),
+            "<Control-t>": _wrap(self._toggle_click_through),
+            "<Control-T>": _wrap(self._toggle_click_through),
+            "<Control-comma>": _wrap(self._open_settings),
+            "<Control-p>": _wrap(self._open_settings),
+            "<Control-P>": _wrap(self._open_settings),
+        }
 
-        # Click-Through shortcut
-        self.win.bind("<Control-t>", lambda e: self._toggle_click_through())
+        for target in (self.win, self.txt_answer, self.container):
+            for seq, handler in shortcuts.items():
+                target.bind(seq, handler)
 
         # Mouse wheel + Ctrl on any widget to adjust transparency on the fly
         for w in (self.win, self.container, self.header_frame, self.txt_answer, self.bottom_bar):
             w.bind("<Control-MouseWheel>", self._on_ctrl_wheel)
 
     def _adjust_opacity(self, delta: float):
-        cur = float(self.config.get("opacity", 0.18))
-        new_val = max(0.03, min(0.90, round(cur + delta, 2)))
+        cur = float(self.config.get("opacity", 0.85))
+        new_val = max(0.05, min(0.95, round(cur + delta, 2)))
         self.config["opacity"] = new_val
         self._apply_transparency()
         save_config(self.config)
@@ -480,15 +602,17 @@ class QuizOverlayApp:
 
         self.last_answer = correct_ans
         self.last_copy_text = copy_txt
+        self.last_explanation = explanation
 
         display_lines = [f"[{q_type}] {correct_ans}"]
         if explanation:
             display_lines.append(f"\n{explanation}")
 
-        self.txt_answer.config(state="normal")
+        full_output = "\n".join(display_lines).strip()
+        self.last_full_text = full_output
+
         self.txt_answer.delete("1.0", "end")
         self.txt_answer.insert("1.0", "\n".join(display_lines))
-        self.txt_answer.config(state="disabled")
 
         idx_str = f"[{self.history_index + 1}/{len(self.history)}]"
         if entry.get("fallback"):
@@ -496,7 +620,7 @@ class QuizOverlayApp:
         self.lbl_status.config(text=f" ⠇{idx_str}")
 
         if self.config.get("auto_copy", True):
-            self._copy_to_system_clipboard(copy_txt)
+            self._copy_to_system_clipboard(full_output)
             self.btn_copy.config(text="✓")
             self.root.after(1200, lambda: self.btn_copy.config(text="📋"))
 
@@ -511,7 +635,13 @@ class QuizOverlayApp:
             self.root.after(0, self._start_snip)
 
         def hotkey_copy():
-            self.root.after(0, self._copy_answer_to_clipboard)
+            self.root.after(0, self._copy_selection_or_full)
+
+        def hotkey_copy_all():
+            self.root.after(0, self._copy_entire_output_to_clipboard)
+
+        def hotkey_copy_expl():
+            self.root.after(0, self._copy_explanation_to_clipboard)
 
         def hotkey_clip():
             self.root.after(0, self._solve_from_clipboard)
@@ -529,14 +659,40 @@ class QuizOverlayApp:
             def hotkey_clickthru():
                 self.root.after(0, self._toggle_click_through)
 
+            def hotkey_ghost():
+                self.root.after(0, self._toggle_ghost_mode)
+
+            def hotkey_opacity_down():
+                self.root.after(0, lambda: self._adjust_opacity(-0.04))
+
+            def hotkey_opacity_up():
+                self.root.after(0, lambda: self._adjust_opacity(+0.04))
+
+            def hotkey_font_up():
+                self.root.after(0, lambda: self._adjust_font_size(+1))
+
+            def hotkey_font_down():
+                self.root.after(0, lambda: self._adjust_font_size(-1))
+
+            def hotkey_settings():
+                self.root.after(0, self._open_settings)
+
             hotkeys = {
                 '<ctrl>+<alt>+s': hotkey_snip,
                 '<ctrl>+<alt>+c': hotkey_copy,
+                '<ctrl>+<alt>+a': hotkey_copy_all,
+                '<ctrl>+<alt>+e': hotkey_copy_expl,
                 '<ctrl>+<alt>+v': hotkey_clip,
                 '<ctrl>+<alt>+h': hotkey_toggle_vis,
                 '<ctrl>+<alt>+<left>': hotkey_prev,
                 '<ctrl>+<alt>+<right>': hotkey_next,
-                '<ctrl>+<alt>+t': hotkey_clickthru
+                '<ctrl>+<alt>+t': hotkey_clickthru,
+                '<ctrl>+<alt>+g': hotkey_ghost,
+                '<ctrl>+<alt>+[': hotkey_opacity_down,
+                '<ctrl>+<alt>+]': hotkey_opacity_up,
+                '<ctrl>+<alt>+=': hotkey_font_up,
+                '<ctrl>+<alt>+-': hotkey_font_down,
+                '<ctrl>+<alt>+p': hotkey_settings,
             }
             self.hotkey_listener = pynput_keyboard.GlobalHotKeys(hotkeys)
             self.hotkey_listener.daemon = True
@@ -666,6 +822,7 @@ class QuizOverlayApp:
 
         self.last_answer = correct_ans
         self.last_copy_text = copy_txt
+        self.last_explanation = explanation
 
         # Add to Answer History stack (up to 20 items)
         history_entry = {
@@ -694,44 +851,99 @@ class QuizOverlayApp:
             display_lines.append(f"\n{explanation}")
 
         output_text = "\n".join(display_lines)
+        self.last_full_text = output_text.strip()
 
-        self.txt_answer.config(state="normal")
         self.txt_answer.delete("1.0", "end")
         self.txt_answer.insert("1.0", output_text)
-        self.txt_answer.config(state="disabled")
 
-        # Auto-copy if enabled
+        # Auto-copy if enabled: automatically copy the entire result (both paragraphs) right after finding the answer!
         if self.config.get("auto_copy", True):
-            self._copy_to_system_clipboard(copy_txt)
+            self._copy_to_system_clipboard(self.last_full_text)
             self.btn_copy.config(text="✓")
             self.root.after(1600, lambda: self.btn_copy.config(text="📋"))
 
+    def _get_selected_text(self) -> str:
+        """Return text currently selected/highlighted in txt_answer, or empty string."""
+        try:
+            if self.txt_answer.tag_ranges("sel"):
+                return self.txt_answer.get("sel.first", "sel.last").strip()
+        except Exception:
+            pass
+        return ""
+
+    def _copy_selection_or_full(self):
+        """If user highlighted text, copy the selection; otherwise copy the ENTIRE result (both paragraphs)."""
+        sel = self._get_selected_text()
+        if sel:
+            self._copy_to_system_clipboard(sel)
+            self.btn_copy.config(text="✓")
+            self._flash_status(" ⠇Copied Sel!")
+            self.root.after(1600, lambda: self.btn_copy.config(text="📋"))
+        else:
+            self._copy_entire_output_to_clipboard()
+
     def _copy_answer_to_clipboard(self):
+        """Copy the 1st paragraph (Answer only) to clipboard."""
         text_to_copy = self.last_copy_text or self.last_answer
+        if not text_to_copy:
+            full = self.txt_answer.get("1.0", "end-1c").strip()
+            parts = full.split("\n\n", 1)
+            text_to_copy = parts[0].strip() if parts else full
+
         if text_to_copy:
             self._copy_to_system_clipboard(text_to_copy)
             self.btn_copy.config(text="✓")
-            self.lbl_status.config(text=" ⠇Copied!")
-            p_name = self.config.get("provider", "ollama").upper()
-            self.root.after(1600, lambda: (self.btn_copy.config(text="📋"), self.lbl_status.config(text=f" ⠇{p_name}")))
+            self._flash_status(" ⠇Copied Ans!")
+            self.root.after(1600, lambda: self.btn_copy.config(text="📋"))
         else:
-            self.lbl_status.config(text=" ⠇Empty")
+            self._flash_status(" ⠇Empty")
+
+    def _copy_explanation_to_clipboard(self):
+        """Copy the 2nd paragraph (Explanation) to clipboard."""
+        expl = getattr(self, "last_explanation", "")
+        if not expl:
+            full = self.txt_answer.get("1.0", "end-1c").strip()
+            parts = full.split("\n\n", 1)
+            if len(parts) > 1:
+                expl = parts[1].strip()
+
+        if expl:
+            self._copy_to_system_clipboard(expl)
+            self.btn_copy.config(text="✓")
+            self._flash_status(" ⠇Copied Expl!")
+            self.root.after(1600, lambda: self.btn_copy.config(text="📋"))
+        else:
+            self._flash_status(" ⠇No Expl")
+
+    def _copy_entire_output_to_clipboard(self):
+        """Copy the entire output (Answer + Explanation) to clipboard."""
+        full_text = getattr(self, "last_full_text", "").strip()
+        if not full_text:
+            full_text = self.txt_answer.get("1.0", "end-1c").strip()
+        if full_text:
+            self._copy_to_system_clipboard(full_text)
+            self.btn_copy.config(text="✓")
+            self._flash_status(" ⠇Copied All!")
+            self.root.after(1600, lambda: self.btn_copy.config(text="📋"))
+        else:
+            self._flash_status(" ⠇Empty")
 
     def _copy_to_system_clipboard(self, text: str):
+        # 1. Primary: Direct Win32 OS-level clipboard assignment (instant, universal across all Windows applications)
+        set_windows_clipboard(text)
+        # 2. Secondary: Tkinter clipboard assignment for internal consistency
         try:
             self.win.clipboard_clear()
             self.win.clipboard_append(text)
-            self.win.update()
-        except Exception as e:
-            print(f"Clipboard copy error: {e}")
+            self.win.update_idletasks()
+        except Exception:
+            pass
 
     def _show_error(self, message: str):
         self.is_solving = False
         self.lbl_status.config(text=" ⠇Error")
-        self.txt_answer.config(state="normal")
         self.txt_answer.delete("1.0", "end")
         self.txt_answer.insert("1.0", message)
-        self.txt_answer.config(state="disabled")
 
     def _show_first_run_hint(self):
         provider = self.config.get("provider", "ollama").capitalize()
@@ -795,12 +1007,23 @@ class QuizOverlayApp:
         self.grip.config(bg=surface_color)
 
     def quit(self):
+        try:
+            if hasattr(self, "hotkey_listener") and self.hotkey_listener:
+                self.hotkey_listener.stop()
+        except Exception:
+            pass
         self.config["window_x"] = self.win.winfo_x()
         self.config["window_y"] = self.win.winfo_y()
         save_config(self.config)
-        self.win.destroy()
-        self.root.destroy()
-        sys.exit(0)
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        os._exit(0)
 
     def run(self):
         self.root.mainloop()
@@ -1087,9 +1310,9 @@ class SettingsDialog:
             self.entry_key.delete(0, "end")
             self.entry_key.insert(0, self.config.get("gemini_api_key", ""))
 
-            cur_m = self.config.get("gemini_model", "gemini-3.8-flash")
+            cur_m = self.config.get("gemini_model", "gemini-3.5-flash-lite")
             self._set_model_text(cur_m)
-            self._build_model_presets(["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-4-argon"])
+            self._build_model_presets(["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"])
 
         self.lbl_test_result.config(text="")
 

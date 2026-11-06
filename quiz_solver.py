@@ -2,6 +2,12 @@ import io
 import json
 import re
 import base64
+import os
+import sys
+import time
+import subprocess
+import shutil
+from urllib.parse import urlparse
 import requests
 from PIL import Image
 
@@ -25,7 +31,8 @@ Your objectives:
      * Set 'correct_answer' and 'copy_text' to this exact answer string.
 
 3. PROVIDE CONCISE JUSTIFICATION:
-   - Provide a 1-sentence quick explanation verifying why this answer is correct.
+   - Provide a concise, accurate 1-2 sentence explanation verifying the concept and why this exact answer is correct.
+   - Ensure the definition or reasoning strictly matches standard terminology and definitions.
 
 You MUST respond strictly with valid JSON conforming to this schema:
 {
@@ -106,6 +113,69 @@ class QuizSolver:
         else:
             return False, f"Unknown provider: {self.provider}"
 
+    def _ensure_ollama_running(self, target_url: str = None) -> bool:
+        """If Ollama is configured on localhost and unreachable, attempt to launch it."""
+        url_to_check = target_url or self.base_url
+        try:
+            parsed = urlparse(url_to_check)
+            host = parsed.hostname or "localhost"
+            port = parsed.port or 11434
+
+            if host not in ("localhost", "127.0.0.1", "::1"):
+                return False  # Remote host, cannot start locally
+
+            # Fast probe to see if already responding
+            for probe_host in (host, "127.0.0.1", "localhost"):
+                try:
+                    r = requests.get(f"http://{probe_host}:{port}", timeout=1.0)
+                    if r.status_code == 200:
+                        return True
+                except Exception:
+                    pass
+
+            # Not responding - find local Ollama binary
+            candidates = [
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"),
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
+                shutil.which("ollama")
+            ]
+            started = False
+            for cand in candidates:
+                if cand and os.path.isfile(cand):
+                    creation_flags = 0
+                    if os.name == "nt":
+                        creation_flags = getattr(subprocess, "DETACHED_PROCESS", 0)
+                        if cand.endswith("ollama.exe"):
+                            creation_flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+                    cmd = [cand] if cand.endswith("app.exe") else [cand, "serve"]
+                    subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        creationflags=creation_flags
+                    )
+                    started = True
+                    break
+
+            if not started:
+                return False
+
+            # Poll for readiness (up to 8 seconds)
+            for _ in range(16):
+                time.sleep(0.5)
+                for probe_host in ("127.0.0.1", "localhost"):
+                    try:
+                        r = requests.get(f"http://{probe_host}:{port}", timeout=1.0)
+                        if r.status_code == 200:
+                            return True
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"Error auto-starting Ollama: {e}")
+        return False
+
     def _test_ollama(self) -> tuple[bool, str]:
         """Test connection to local or remote Ollama server."""
         base = self.base_url.rstrip("/")
@@ -114,34 +184,45 @@ class QuizSolver:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
+        # If offline on localhost, attempt auto-start
+        self._ensure_ollama_running(clean_base)
+
+        endpoints = [clean_base]
+        if "localhost" in clean_base:
+            endpoints.append(clean_base.replace("localhost", "127.0.0.1"))
+        elif "127.0.0.1" in clean_base:
+            endpoints.append(clean_base.replace("127.0.0.1", "localhost"))
+
         # 1. First probe Ollama native /api/tags
-        try:
-            resp = requests.get(f"{clean_base}/api/tags", headers=headers, timeout=4)
-            if resp.status_code == 200:
-                models_data = resp.json().get("models", [])
-                model_names = [m.get("name") for m in models_data if isinstance(m, dict)]
-                if self.model and any(self.model in name for name in model_names):
-                    return True, f"Ollama online! '{self.model}' ready."
-                elif model_names:
-                    return True, f"Ollama online! Available: {model_names[0]}"
-                return True, "Ollama online! (No model pulled yet)"
-        except requests.exceptions.ConnectionError:
-            return False, f"Ollama not running at {clean_base}"
-        except Exception:
-            pass
+        for ep in endpoints:
+            try:
+                resp = requests.get(f"{ep}/api/tags", headers=headers, timeout=4)
+                if resp.status_code == 200:
+                    models_data = resp.json().get("models", [])
+                    model_names = [m.get("name") for m in models_data if isinstance(m, dict)]
+                    if self.model and any(self.model in name for name in model_names):
+                        return True, f"Ollama online! '{self.model}' ready."
+                    elif model_names:
+                        return True, f"Ollama online! Available: {model_names[0]}"
+                    return True, "Ollama online! (No model pulled yet)"
+            except requests.exceptions.ConnectionError:
+                pass
+            except Exception:
+                pass
 
         # 2. Probe OpenAI compatibility /v1/models
-        try:
-            v1_url = f"{clean_base}/v1/models"
-            resp = requests.get(v1_url, headers=headers, timeout=4)
-            if resp.status_code == 200:
-                return True, "Ollama OpenAI endpoint online!"
-        except requests.exceptions.ConnectionError:
-            return False, f"Ollama not running at {clean_base}"
-        except Exception as e:
-            return False, f"Cannot connect: {str(e)[:40]}"
+        for ep in endpoints:
+            try:
+                v1_url = f"{ep}/v1/models"
+                resp = requests.get(v1_url, headers=headers, timeout=4)
+                if resp.status_code == 200:
+                    return True, "Ollama OpenAI endpoint online!"
+            except requests.exceptions.ConnectionError:
+                pass
+            except Exception as e:
+                return False, f"Cannot connect: {str(e)[:40]}"
 
-        return False, f"Ollama returned HTTP error from {clean_base}"
+        return False, f"Ollama not running at {clean_base}"
 
     def _test_qwen(self) -> tuple[bool, str]:
         if not self.api_key:
@@ -173,10 +254,20 @@ class QuizSolver:
         try:
             from google import genai
             client = genai.Client(api_key=self.api_key)
-            resp = client.models.generate_content(
-                model=self.model or "gemini-3.8-flash",
-                contents="Reply with OK"
-            )
+            try:
+                resp = client.models.generate_content(
+                    model=self.model or "gemini-3.8-flash",
+                    contents="Reply with OK"
+                )
+            except Exception as test_err:
+                err_s = str(test_err)
+                if ("503" in err_s or "UNAVAILABLE" in err_s) and self.model != "gemini-3.5-flash-lite":
+                    resp = client.models.generate_content(
+                        model="gemini-3.5-flash-lite",
+                        contents="Reply with OK"
+                    )
+                else:
+                    raise test_err
             if resp and resp.text:
                 return True, "Gemini API key is active!"
             return False, "No response from Gemini."
@@ -218,6 +309,7 @@ class QuizSolver:
     def _fallback_solve_ollama(self, pil_image: Image.Image, original_error: str = "") -> dict:
         """Attempt offline fallback via local Ollama when cloud engine fails."""
         try:
+            self._ensure_ollama_running(self.fallback_base_url or "http://localhost:11434/v1")
             fallback_solver = QuizSolver(
                 provider="ollama",
                 model=self.fallback_model or "llava",
@@ -229,7 +321,7 @@ class QuizSolver:
                 res["fallback"] = True
                 res["original_provider"] = self.provider
                 orig_exp = res.get("explanation", "")
-                res["explanation"] = f"{orig_exp} (Auto-fallback to offline Ollama after {self.provider.upper()} error)."
+                res["explanation"] = orig_exp
                 return res
         except Exception as e:
             print(f"Fallback attempt failed: {e}")
@@ -237,13 +329,21 @@ class QuizSolver:
 
     def _solve_ollama(self, pil_image: Image.Image) -> dict:
         """Solve using Ollama (supporting local or remote vision models)."""
+        self._ensure_ollama_running(self.base_url)
+
         try:
             buffered = io.BytesIO()
             pil_image.save(buffered, format="JPEG", quality=90)
             img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
             base = self.base_url.rstrip("/")
-            v1_url = f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+            clean_base = base[:-3] if base.endswith("/v1") else base
+
+            base_candidates = [clean_base]
+            if "localhost" in clean_base:
+                base_candidates.append(clean_base.replace("localhost", "127.0.0.1"))
+            elif "127.0.0.1" in clean_base:
+                base_candidates.append(clean_base.replace("127.0.0.1", "localhost"))
 
             headers = {"Content-Type": "application/json"}
             if self.api_key:
@@ -277,41 +377,35 @@ class QuizSolver:
                 "stream": False
             }
 
-            clean_base = base[:-3] if base.endswith("/v1") else base
-
-            try:
-                resp = requests.post(v1_url, json=payload, headers=headers, timeout=200)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    raw_text = data["choices"][0]["message"]["content"]
-                    parsed_data = self._parse_json_response(raw_text)
+            # 1. Try OpenAI /v1/chat/completions endpoint across candidates
+            for b_cand in base_candidates:
+                v1_url = f"{b_cand}/v1/chat/completions"
+                try:
+                    resp = requests.post(v1_url, json=payload, headers=headers, timeout=200)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        raw_text = data["choices"][0]["message"]["content"]
+                        parsed_data = self._parse_json_response(raw_text)
+                        return {
+                            "success": True,
+                            "type": parsed_data.get("type", "MCQ").upper(),
+                            "question_summary": parsed_data.get("question_summary", "Question analyzed"),
+                            "correct_answer": parsed_data.get("correct_answer", "No answer found"),
+                            "copy_text": parsed_data.get("copy_text", parsed_data.get("correct_answer", "")),
+                            "explanation": parsed_data.get("explanation", ""),
+                            "raw": raw_text
+                        }
+                except requests.exceptions.ConnectionError:
+                    continue
+                except requests.exceptions.Timeout:
                     return {
-                        "success": True,
-                        "type": parsed_data.get("type", "MCQ").upper(),
-                        "question_summary": parsed_data.get("question_summary", "Question analyzed"),
-                        "correct_answer": parsed_data.get("correct_answer", "No answer found"),
-                        "copy_text": parsed_data.get("copy_text", parsed_data.get("correct_answer", "")),
-                        "explanation": parsed_data.get("explanation", ""),
-                        "raw": raw_text
+                        "success": False,
+                        "error": "Ollama CPU processing timed out (>200s).\n\nRunning a 7B model on a laptop CPU is very slow. Switch to Gemini in Settings (⚙) for instant (<1s) answers!"
                     }
-            except requests.exceptions.ConnectionError:
-                return {
-                    "success": False,
-                    "error": f"Ollama is offline ({clean_base} unreachable).\n\n"
-                             f"• If local: Run 'ollama serve' in terminal\n"
-                             f"• If remote: Check URL in Settings (⚙)\n"
-                             f"• Or switch to Gemini/Qwen in Settings (⚙)"
-                }
-            except requests.exceptions.Timeout:
-                return {
-                    "success": False,
-                    "error": "Ollama CPU processing timed out (>200s).\n\nRunning a 7B model on a laptop CPU is very slow. Switch to Gemini in Settings (⚙) for instant (<1s) answers!"
-                }
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
-            # Fallback to Ollama native /api/chat
-            native_url = f"{clean_base}/api/chat"
+            # 2. Try native Ollama /api/chat endpoint across candidates
             native_payload = {
                 "model": self.model,
                 "messages": [
@@ -329,27 +423,35 @@ class QuizSolver:
                 "format": "json"
             }
 
-            resp2 = requests.post(native_url, json=native_payload, headers=headers, timeout=200)
-            if resp2.status_code == 200:
-                data2 = resp2.json()
-                raw_text = data2["message"]["content"]
-                parsed_data = self._parse_json_response(raw_text)
-                return {
-                    "success": True,
-                    "type": parsed_data.get("type", "MCQ").upper(),
-                    "question_summary": parsed_data.get("question_summary", "Question analyzed"),
-                    "correct_answer": parsed_data.get("correct_answer", "No answer found"),
-                    "copy_text": parsed_data.get("copy_text", parsed_data.get("correct_answer", "")),
-                    "explanation": parsed_data.get("explanation", ""),
-                    "raw": raw_text
-                }
-            elif resp2.status_code == 404:
-                return {"success": False, "error": f"Model '{self.model}' not found in Ollama.\nRun: ollama pull {self.model}"}
+            for b_cand in base_candidates:
+                native_url = f"{b_cand}/api/chat"
+                try:
+                    resp2 = requests.post(native_url, json=native_payload, headers=headers, timeout=200)
+                    if resp2.status_code == 200:
+                        data2 = resp2.json()
+                        raw_text = data2["message"]["content"]
+                        parsed_data = self._parse_json_response(raw_text)
+                        return {
+                            "success": True,
+                            "type": parsed_data.get("type", "MCQ").upper(),
+                            "question_summary": parsed_data.get("question_summary", "Question analyzed"),
+                            "correct_answer": parsed_data.get("correct_answer", "No answer found"),
+                            "copy_text": parsed_data.get("copy_text", parsed_data.get("correct_answer", "")),
+                            "explanation": parsed_data.get("explanation", ""),
+                            "raw": raw_text
+                        }
+                    elif resp2.status_code == 404:
+                        return {"success": False, "error": f"Model '{self.model}' not found in Ollama.\nRun: ollama pull {self.model}"}
+                except requests.exceptions.ConnectionError:
+                    continue
+                except requests.exceptions.Timeout:
+                    return {
+                        "success": False,
+                        "error": "Ollama CPU processing timed out (>200s).\n\nRunning a 7B model on a laptop CPU is very slow. Switch to Gemini in Settings (⚙) for instant (<1s) answers!"
+                    }
+                except Exception:
+                    pass
 
-            return {"success": False, "error": f"Ollama error ({resp2.status_code}): {resp2.text[:80]}"}
-
-        except requests.exceptions.ConnectionError:
-            clean_base = self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
             return {
                 "success": False,
                 "error": f"Ollama is offline ({clean_base} unreachable).\n\n"
@@ -357,11 +459,9 @@ class QuizSolver:
                          f"• If remote: Check URL in Settings (⚙)\n"
                          f"• Or switch to Gemini/Qwen in Settings (⚙)"
             }
-        except requests.exceptions.Timeout:
-            return {
-                "success": False,
-                "error": "Ollama timed out (>200s).\n\nRunning a 7B model on a laptop CPU is very slow.\nSwitch to Gemini in Settings (⚙) for instant (<1s) answers!"
-            }
+
+        except Exception as e:
+            return {"success": False, "error": f"Ollama error: {str(e)[:80]}"}
         except Exception as e:
             return {"success": False, "error": f"Ollama error: {str(e)[:80]}"}
 
@@ -457,11 +557,22 @@ class QuizSolver:
                 "find the correct answer, and return the structured JSON result."
             )
 
-            response = self.gemini_client.models.generate_content(
-                model=self.model or "gemini-3.8-flash",
-                contents=[pil_image, prompt],
-                config=config
-            )
+            try:
+                response = self.gemini_client.models.generate_content(
+                    model=self.model or "gemini-3.8-flash",
+                    contents=[pil_image, prompt],
+                    config=config
+                )
+            except Exception as gem_err:
+                err_s = str(gem_err)
+                if ("503" in err_s or "UNAVAILABLE" in err_s or "429" in err_s or "404" in err_s or "NOT_FOUND" in err_s) and self.model != "gemini-3.5-flash-lite":
+                    response = self.gemini_client.models.generate_content(
+                        model="gemini-3.5-flash-lite",
+                        contents=[pil_image, prompt],
+                        config=config
+                    )
+                else:
+                    raise gem_err
 
             raw_text = response.text or ""
             parsed_data = self._parse_json_response(raw_text)
