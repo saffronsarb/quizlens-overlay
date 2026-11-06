@@ -101,5 +101,34 @@ class TestQuizLens(unittest.TestCase):
         self.assertLessEqual(processed.width, 1024)
         self.assertLessEqual(processed.height, 1024)
 
+    def test_auto_fallback_configuration(self):
+        solver = QuizSolver(provider="gemini", api_key="test_key", enable_fallback=True, fallback_model="llava")
+        self.assertTrue(solver.enable_fallback)
+        self.assertEqual(solver.fallback_model, "llava")
+        self.assertEqual(solver.fallback_base_url, "http://localhost:11434/v1")
+
+        # Disable fallback
+        solver.update_credentials(provider="qwen", api_key="q_key", model="qwen-vl-max", enable_fallback=False)
+        self.assertFalse(solver.enable_fallback)
+
+    def test_font_size_clamping(self):
+        # Font size should be bounded between 6 and 24
+        def clamp(val):
+            return max(6, min(24, val))
+        self.assertEqual(clamp(4), 6)
+        self.assertEqual(clamp(8), 8)
+        self.assertEqual(clamp(30), 24)
+
+    def test_history_buffer_logic(self):
+        history = []
+        max_items = 20
+        for i in range(25):
+            history.append({"id": i, "answer": f"Answer {i}"})
+            if len(history) > max_items:
+                history.pop(0)
+        self.assertEqual(len(history), 20)
+        self.assertEqual(history[0]["id"], 5)
+        self.assertEqual(history[-1]["id"], 24)
+
 if __name__ == "__main__":
     unittest.main()

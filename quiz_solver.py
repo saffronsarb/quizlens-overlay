@@ -43,12 +43,18 @@ class QuizSolver:
         provider: str = "ollama",
         api_key: str = "",
         model: str = "llama3.2-vision",
-        base_url: str = "http://localhost:11434/v1"
+        base_url: str = "http://localhost:11434/v1",
+        enable_fallback: bool = True,
+        fallback_model: str = "llava",
+        fallback_base_url: str = "http://localhost:11434/v1"
     ):
         self.provider = provider.lower()
         self.api_key = api_key.strip()
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.enable_fallback = enable_fallback
+        self.fallback_model = fallback_model
+        self.fallback_base_url = fallback_base_url.rstrip("/")
         self.gemini_client = None
 
         if self.provider == "gemini" and self.api_key:
@@ -67,11 +73,18 @@ class QuizSolver:
         provider: str,
         api_key: str,
         model: str,
-        base_url: str = ""
+        base_url: str = "",
+        enable_fallback: bool = True,
+        fallback_model: str = "llava",
+        fallback_base_url: str = "http://localhost:11434/v1"
     ):
         self.provider = provider.lower()
         self.api_key = api_key.strip()
         self.model = model
+        self.enable_fallback = enable_fallback
+        self.fallback_model = fallback_model
+        if fallback_base_url:
+            self.fallback_base_url = fallback_base_url.rstrip("/")
         if base_url:
             self.base_url = base_url.rstrip("/")
         elif self.provider == "ollama":
@@ -186,11 +199,41 @@ class QuizSolver:
         if self.provider == "ollama":
             return self._solve_ollama(pil_image)
         elif self.provider == "qwen":
-            return self._solve_qwen(pil_image)
+            res = self._solve_qwen(pil_image)
+            if not res.get("success") and self.enable_fallback:
+                fallback_res = self._fallback_solve_ollama(pil_image, original_error=res.get("error", "Qwen error"))
+                if fallback_res.get("success"):
+                    return fallback_res
+            return res
         elif self.provider == "gemini":
-            return self._solve_gemini(pil_image)
+            res = self._solve_gemini(pil_image)
+            if not res.get("success") and self.enable_fallback:
+                fallback_res = self._fallback_solve_ollama(pil_image, original_error=res.get("error", "Gemini error"))
+                if fallback_res.get("success"):
+                    return fallback_res
+            return res
         else:
             return {"success": False, "error": f"Unknown provider: {self.provider}"}
+
+    def _fallback_solve_ollama(self, pil_image: Image.Image, original_error: str = "") -> dict:
+        """Attempt offline fallback via local Ollama when cloud engine fails."""
+        try:
+            fallback_solver = QuizSolver(
+                provider="ollama",
+                model=self.fallback_model or "llava",
+                base_url=self.fallback_base_url or "http://localhost:11434/v1",
+                enable_fallback=False
+            )
+            res = fallback_solver._solve_ollama(pil_image)
+            if res.get("success"):
+                res["fallback"] = True
+                res["original_provider"] = self.provider
+                orig_exp = res.get("explanation", "")
+                res["explanation"] = f"{orig_exp} (Auto-fallback to offline Ollama after {self.provider.upper()} error)."
+                return res
+        except Exception as e:
+            print(f"Fallback attempt failed: {e}")
+        return {"success": False, "error": f"{original_error} (Ollama fallback also failed)"}
 
     def _solve_ollama(self, pil_image: Image.Image) -> dict:
         """Solve using Ollama (supporting local or remote vision models)."""

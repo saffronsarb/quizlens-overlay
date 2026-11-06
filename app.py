@@ -39,12 +39,18 @@ class QuizOverlayApp:
         self.config = load_config()
         provider = self.config.get("provider", "ollama")
         base_url = self.config.get(f"{provider}_base_url", "http://localhost:11434/v1")
+        enable_fallback = self.config.get("auto_fallback_ollama", True)
+        fallback_model = self.config.get("ollama_model", "llava")
+        fallback_base_url = self.config.get("ollama_base_url", "http://localhost:11434/v1")
 
         self.solver = QuizSolver(
             provider=provider,
             api_key=self.config.get("api_key", ""),
             model=self.config.get("model", "llama3.2-vision"),
-            base_url=base_url
+            base_url=base_url,
+            enable_fallback=enable_fallback,
+            fallback_model=fallback_model,
+            fallback_base_url=fallback_base_url
         )
 
         # 1. Root Tkinter window: toolwindow + withdrawn
@@ -77,10 +83,13 @@ class QuizOverlayApp:
 
         # State tracking
         self.is_ghost_mode = self.config.get("glass_mode", False)
+        self.is_click_through = self.config.get("click_through", False)
         self.is_visible = True
         self.is_solving = False
         self.last_answer = ""
         self.last_copy_text = ""
+        self.history = []
+        self.history_index = -1
         self._drag_start_x = 0
         self._drag_start_y = 0
 
@@ -309,6 +318,13 @@ class QuizOverlayApp:
         self.context_menu.add_command(label="📋 Copy Answer (Ctrl+C)", command=self._copy_answer_to_clipboard)
         self.context_menu.add_command(label="🖥 Solve Fullscreen", command=self._solve_fullscreen)
         self.context_menu.add_separator()
+        self.context_menu.add_command(label="◀ Previous Answer (Ctrl+←)", command=self._history_prev)
+        self.context_menu.add_command(label="▶ Next Answer (Ctrl+→)", command=self._history_next)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="🗚 Increase Font (Ctrl++)", command=lambda: self._adjust_font_size(+1))
+        self.context_menu.add_command(label="🗛 Decrease Font (Ctrl+-)", command=lambda: self._adjust_font_size(-1))
+        self.context_menu.add_command(label="🖱 Toggle Click-Through (Ctrl+T)", command=self._toggle_click_through)
+        self.context_menu.add_separator()
         self.context_menu.add_command(label="👻 Toggle Ghost Mode (Ctrl+G)", command=self._toggle_ghost_mode)
         self.context_menu.add_command(label="➕ More Transparent (Ctrl+[)", command=lambda: self._adjust_opacity(-0.04))
         self.context_menu.add_command(label="➖ Less Transparent (Ctrl+])", command=lambda: self._adjust_opacity(+0.04))
@@ -328,6 +344,20 @@ class QuizOverlayApp:
         self.win.bind("<Control-bracketleft>", lambda e: self._adjust_opacity(-0.04))
         self.win.bind("<Control-bracketright>", lambda e: self._adjust_opacity(+0.04))
         self.win.bind("<Control-g>", lambda e: self._toggle_ghost_mode())
+
+        # History Navigation shortcuts
+        self.win.bind("<Control-Left>", lambda e: self._history_prev())
+        self.win.bind("<Control-Right>", lambda e: self._history_next())
+
+        # Font Scaling shortcuts
+        self.win.bind("<Control-plus>", lambda e: self._adjust_font_size(+1))
+        self.win.bind("<Control-equal>", lambda e: self._adjust_font_size(+1))
+        self.win.bind("<Control-minus>", lambda e: self._adjust_font_size(-1))
+        self.win.bind("<Control-underscore>", lambda e: self._adjust_font_size(-1))
+        self.win.bind("<Control-0>", lambda e: self._reset_font_size())
+
+        # Click-Through shortcut
+        self.win.bind("<Control-t>", lambda e: self._toggle_click_through())
 
         # Mouse wheel + Ctrl on any widget to adjust transparency on the fly
         for w in (self.win, self.container, self.header_frame, self.txt_answer, self.bottom_bar):
@@ -373,6 +403,103 @@ class QuizOverlayApp:
         p_name = self.config.get("provider", "ollama").upper()
         self.root.after(1200, lambda: self.lbl_status.config(text=f" ⠇{p_name}"))
 
+    def _flash_status(self, text: str, duration_ms: int = 1200):
+        """Briefly display status feedback and revert to provider name."""
+        self.lbl_status.config(text=text)
+        p_name = self.config.get("provider", "ollama").upper()
+        self.root.after(duration_ms, lambda: self.lbl_status.config(text=f" ⠇{p_name}"))
+
+    def _adjust_font_size(self, delta: int):
+        """Dynamically adjust text font size on the fly."""
+        cur = int(self.config.get("font_size", 8))
+        new_size = max(6, min(24, cur + delta))
+        if new_size != cur:
+            self.config["font_size"] = new_size
+            save_config(self.config)
+            self.txt_answer.config(font=("Consolas", new_size, "bold"))
+            self._flash_status(f" ⠇Font {new_size}pt")
+
+    def _reset_font_size(self):
+        """Reset text font size to default 8pt."""
+        self.config["font_size"] = 8
+        save_config(self.config)
+        self.txt_answer.config(font=("Consolas", 8, "bold"))
+        self._flash_status(" ⠇Font 8pt")
+
+    def _toggle_click_through(self):
+        """Toggle Win32 WS_EX_TRANSPARENT so mouse clicks pass through to background."""
+        self.is_click_through = not self.is_click_through
+        self.config["click_through"] = self.is_click_through
+        save_config(self.config)
+        try:
+            user32 = ctypes.windll.user32
+            win_hwnd = int(self.win.wm_frame(), 16) if hasattr(self.win, "wm_frame") else self.win.winfo_id()
+            style = user32.GetWindowLongW(win_hwnd, -20)  # GWL_EXSTYLE
+            WS_EX_TRANSPARENT = 0x00000020
+            if self.is_click_through:
+                style |= WS_EX_TRANSPARENT
+                self.lbl_status.config(text=" ⠇Pass-Thru")
+            else:
+                style &= ~WS_EX_TRANSPARENT
+                p_name = self.config.get("provider", "ollama").upper()
+                self.lbl_status.config(text=f" ⠇{p_name}")
+            user32.SetWindowLongW(win_hwnd, -20, style)
+            flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020  # SWP_FRAMECHANGED
+            user32.SetWindowPos(win_hwnd, 0, 0, 0, 0, 0, flags)
+        except Exception as e:
+            print(f"Click-through warning: {e}")
+
+    def _history_prev(self):
+        """Step back to previous solved question in the history stack."""
+        if not self.history:
+            self._flash_status(" ⠇No History")
+            return
+        if self.history_index <= 0:
+            self._flash_status(" ⠇Oldest")
+            return
+        self.history_index -= 1
+        self._display_history_entry(self.history[self.history_index])
+
+    def _history_next(self):
+        """Step forward to more recent question in the history stack."""
+        if not self.history:
+            self._flash_status(" ⠇No History")
+            return
+        if self.history_index >= len(self.history) - 1:
+            self._flash_status(" ⠇Latest")
+            return
+        self.history_index += 1
+        self._display_history_entry(self.history[self.history_index])
+
+    def _display_history_entry(self, entry: dict):
+        """Render an answer history entry and auto-copy its text."""
+        q_type = entry.get("type", "MCQ")
+        correct_ans = entry.get("correct_answer", "")
+        copy_txt = entry.get("copy_text", correct_ans)
+        explanation = entry.get("explanation", "")
+
+        self.last_answer = correct_ans
+        self.last_copy_text = copy_txt
+
+        display_lines = [f"[{q_type}] {correct_ans}"]
+        if explanation:
+            display_lines.append(f"\n{explanation}")
+
+        self.txt_answer.config(state="normal")
+        self.txt_answer.delete("1.0", "end")
+        self.txt_answer.insert("1.0", "\n".join(display_lines))
+        self.txt_answer.config(state="disabled")
+
+        idx_str = f"[{self.history_index + 1}/{len(self.history)}]"
+        if entry.get("fallback"):
+            idx_str += " (Fallback)"
+        self.lbl_status.config(text=f" ⠇{idx_str}")
+
+        if self.config.get("auto_copy", True):
+            self._copy_to_system_clipboard(copy_txt)
+            self.btn_copy.config(text="✓")
+            self.root.after(1200, lambda: self.btn_copy.config(text="📋"))
+
     def _show_context_menu(self, event):
         self.context_menu.tk_popup(event.x_root, event.y_root)
 
@@ -393,11 +520,23 @@ class QuizOverlayApp:
             self.root.after(0, self._toggle_visibility)
 
         try:
+            def hotkey_prev():
+                self.root.after(0, self._history_prev)
+
+            def hotkey_next():
+                self.root.after(0, self._history_next)
+
+            def hotkey_clickthru():
+                self.root.after(0, self._toggle_click_through)
+
             hotkeys = {
                 '<ctrl>+<alt>+s': hotkey_snip,
                 '<ctrl>+<alt>+c': hotkey_copy,
                 '<ctrl>+<alt>+v': hotkey_clip,
-                '<ctrl>+<alt>+h': hotkey_toggle_vis
+                '<ctrl>+<alt>+h': hotkey_toggle_vis,
+                '<ctrl>+<alt>+<left>': hotkey_prev,
+                '<ctrl>+<alt>+<right>': hotkey_next,
+                '<ctrl>+<alt>+t': hotkey_clickthru
             }
             self.hotkey_listener = pynput_keyboard.GlobalHotKeys(hotkeys)
             self.hotkey_listener.daemon = True
@@ -528,8 +667,26 @@ class QuizOverlayApp:
         self.last_answer = correct_ans
         self.last_copy_text = copy_txt
 
-        # Update status tag
-        self.lbl_status.config(text=f" ⠇[{q_type}]")
+        # Add to Answer History stack (up to 20 items)
+        history_entry = {
+            "type": q_type,
+            "correct_answer": correct_ans,
+            "copy_text": copy_txt,
+            "explanation": explanation,
+            "fallback": result.get("fallback", False)
+        }
+        self.history.append(history_entry)
+        if len(self.history) > 20:
+            self.history.pop(0)
+        self.history_index = len(self.history) - 1
+
+        # Update status tag with indicator
+        if result.get("fallback"):
+            self.lbl_status.config(text=" ⠇Ollama (Fallback)")
+        elif len(self.history) > 1:
+            self.lbl_status.config(text=f" ⠇[{self.history_index + 1}/{len(self.history)}]")
+        else:
+            self.lbl_status.config(text=f" ⠇[{q_type}]")
 
         # Format pure answer output
         display_lines = [f"[{q_type}] {correct_ans}"]
@@ -597,11 +754,18 @@ class QuizOverlayApp:
         prov = self.config.get("provider", "ollama")
         base_url = self.config.get(f"{prov}_base_url", "http://localhost:11434/v1")
 
+        enable_fallback = self.config.get("auto_fallback_ollama", True)
+        fallback_model = self.config.get("ollama_model", "llava")
+        fallback_base_url = self.config.get("ollama_base_url", "http://localhost:11434/v1")
+
         self.solver.update_credentials(
             provider=prov,
             api_key=self.config.get("api_key", ""),
             model=self.config.get("model", "llama3.2-vision"),
-            base_url=base_url
+            base_url=base_url,
+            enable_fallback=enable_fallback,
+            fallback_model=fallback_model,
+            fallback_base_url=fallback_base_url
         )
         self.win.attributes("-topmost", self.config.get("always_on_top", True))
         self._apply_transparency()
@@ -845,6 +1009,14 @@ class SettingsDialog:
             font=("Segoe UI", 8)
         ).pack(anchor="w", padx=16, pady=1)
 
+        self.var_fallback = tk.BooleanVar(value=self.config.get("auto_fallback_ollama", True))
+        tk.Checkbutton(
+            self.win, text="Auto-fallback to local Ollama on cloud error",
+            variable=self.var_fallback, bg="#18181B", fg="#FAFAFA",
+            selectcolor="#101012", activebackground="#18181B",
+            font=("Segoe UI", 8)
+        ).pack(anchor="w", padx=16, pady=1)
+
         # Bottom Action Buttons
         btn_frame = tk.Frame(self.win, bg="#18181B")
         btn_frame.pack(side="bottom", fill="x", padx=16, pady=10)
@@ -983,6 +1155,7 @@ class SettingsDialog:
         self.config["glass_mode"] = self.var_ghost.get()
         self.config["auto_copy"] = self.var_autocopy.get()
         self.config["always_on_top"] = self.var_topmost.get()
+        self.config["auto_fallback_ollama"] = self.var_fallback.get()
         self.on_save(self.config)
         self.win.destroy()
 
