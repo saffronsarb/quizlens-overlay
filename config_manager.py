@@ -23,6 +23,8 @@ DEFAULT_CONFIG = {
     "compact_mode": False,
     "glass_mode": False,
     "hide_from_taskbar": True,
+    "auto_fallback_ollama": True,
+    "click_through": False,
     "window_x": 100,
     "window_y": 100,
     "window_width": 200,

@@ -46,6 +46,14 @@
   Answers are instantly placed on your Windows system clipboard the moment they are solved. Clicking anywhere on the answer re-copies it.
 - **👻 Ghost Mode & Deep Opacity (Down to 3%)**:
   Base transparency is adjustable on the fly from **3% to 85%** using `Ctrl + MouseWheel` or `Ctrl + [ / ]`, with an optional Ghost Mode (`Ctrl + G`) that renders the background completely 100% invisible.
+- **📜 20-Question Answer History Stack**:
+  Never lose a previously solved question. Use `Ctrl + ←` and `Ctrl + →` to effortlessly cycle backwards and forwards through recent questions, with instant auto-clipboard copying.
+- **🔍 Dynamic On-the-Fly Font Scaling**:
+  Resize text font size directly in the HUD using `Ctrl + +`, `Ctrl + -`, and `Ctrl + 0` without needing to open the Settings modal.
+- **🖱️ Click-Through Mode (`WS_EX_TRANSPARENT`)**:
+  Press `Ctrl + T` (or `Ctrl + Alt + T`) to let mouse clicks pass completely through the overlay directly into the buttons or checkboxes underneath.
+- **🔄 Cloud-to-Local Resilient Fallback**:
+  If Gemini or Qwen API fails due to rate limits or network issues, QuizLens automatically falls back to offline local Ollama (`llava`) so you're never stuck without an answer.
 - **🔌 Tri-Engine Multi-LLM Architecture**:
   Seamlessly switch between **Ollama (100% offline local)**, **Google Gemini (cloud speed)**, and **Alibaba Qwen (frontier reasoning)** with one click in the Settings modal (`⚙`).
 
@@ -115,6 +123,10 @@ pip install -r requirements.txt
 | **`Ctrl + MouseWheel`** | **Live Opacity** | Scroll up/down to smoothly adjust HUD transparency between 3% and 90%. |
 | **`Ctrl + [` / `Ctrl + ]`** | **Fine Opacity Step** | Step transparency up or down by 4% increments. |
 | **`Ctrl + G`** | **Toggle Ghost Mode** | Toggles 100% invisible chroma-keyed background (text floats naked on screen). |
+| **`Ctrl + ←` / `Ctrl + →`** | **History Navigation** | Step backwards/forwards through recently solved question history stack. |
+| **`Ctrl + +` / `Ctrl + -`** | **Font Resizing** | Dynamically scale answer text larger or smaller on the fly. |
+| **`Ctrl + 0`** | **Reset Font Size** | Reset answer text size to standard default 8pt. |
+| **`Ctrl + T`** or `Ctrl+Alt+T` | **Click-Through Mode** | Toggle pass-through mode so mouse clicks pass through the HUD to underlying windows. |
 | **`Click on Answer`** | **One-Click Copy** | Copies the cleanest answer string back to clipboard. |
 | **`Ctrl+Alt+H`** | **Boss-Key Toggle** | Instantly hides or shows the overlay window. |
 | **`Right-Click`** | **Context Menu** | Opens quick menu for Settings, Snip, Copy, Opacity, or Exit. |
@@ -163,9 +175,10 @@ For deep technical insights into how QuizLens achieves true Windows stealth, eli
 - [x] **Multi-Monitor Virtual Screen Bounds**: Win32 virtual desktop geometry translation across multi-display setups.
 - [x] **True Taskbar Omission**: Win32 parent-ownership hierarchy and `SWP_FRAMECHANGED` shell flushing.
 - [x] **Screen Capture Invisibility**: Integrated `WDA_EXCLUDEFROMCAPTURE` (Windows 10 2004+).
-- [ ] **Click-Through Mode (`WS_EX_TRANSPARENT`)**: Pass mouse clicks directly through the overlay to underlying buttons.
-- [ ] **Answer History Stack (`Ctrl+←` / `Ctrl+→`)**: Cycle through the last 10 solved questions and answers.
-- [ ] **Automatic Cloud-to-Local Fallback**: Automatically failover from Gemini/Qwen to local Ollama on network or rate limit errors.
+- [x] **Click-Through Mode (`WS_EX_TRANSPARENT`)**: Pass mouse clicks directly through the overlay to underlying buttons.
+- [x] **Answer History Stack (`Ctrl+←` / `Ctrl+→`)**: Cycle through the last 20 solved questions and answers.
+- [x] **Automatic Cloud-to-Local Fallback**: Automatically failover from Gemini/Qwen to local Ollama on network or rate limit errors.
+- [x] **Dynamic Font Scaling (`Ctrl++` / `Ctrl+-` / `Ctrl+0`)**: On-the-fly text font resizing without opening settings.
 - [ ] **Local Fast OCR Pipeline**: Extract question text with local OCR before language-only models to cut solve latency.
 
 ---
