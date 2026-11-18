@@ -14,7 +14,7 @@ DEFAULT_CONFIG = {
     "qwen_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "qwen_model": "qwen-vl-max",
     "gemini_api_key": "",
-    "gemini_model": "gemini-3.8-flash",
+    "gemini_model": "gemini-3.5-flash-lite",
     "model": "llama3.2-vision",
     "opacity": 0.18,
     "font_size": 8,

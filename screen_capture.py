@@ -21,6 +21,26 @@ except ImportError:
     mss = None
     HAS_MSS = False
 
+def make_window_invisible_to_capture(window) -> bool:
+    """Exclude a window from all screen recordings, screenshots, and screen shares (Zoom, Discord, Meet, OBS, Teams)."""
+    try:
+        if os.name != "nt":
+            return False
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
+        WDA_EXCLUDEFROMCAPTURE = 0x00000011
+
+        window.update_idletasks()
+        frame_hex = window.wm_frame()
+        hwnd = int(frame_hex, 16) if frame_hex else window.winfo_id()
+        if hwnd:
+            return bool(user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE))
+    except Exception as e:
+        print(f"SetWindowDisplayAffinity warning: {e}")
+    return False
+
 def capture_fullscreen() -> Image.Image | None:
     """Capture the full active screen across all monitors."""
     # Attempt mss first
@@ -131,6 +151,9 @@ class SnipSelector:
             self.root.attributes("-fullscreen", True)
             screen_w = self.root.winfo_screenwidth()
             screen_h = self.root.winfo_screenheight()
+
+        # Exclude snip overlay completely from screen shares, recordings, and captures
+        make_window_invisible_to_capture(self.root)
 
         self.canvas = tk.Canvas(self.root, cursor="cross", bg="#111111", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)

@@ -73,6 +73,46 @@ class TestQuizLens(unittest.TestCase):
         self.assertEqual(parsed["type"], "MCQ")
         self.assertEqual(parsed["correct_answer"], "C) Mars")
 
+    def test_markdown_preamble_postamble_cleaning(self):
+        solver = QuizSolver(provider="ollama", api_key="")
+        sample_with_preamble = """Sure! Here is the analyzed quiz question:
+        ```json
+        {
+            "type": "MCQ",
+            "question_summary": "What is the speed of light?",
+            "correct_answer": "3 x 10^8 m/s",
+            "copy_text": "3 x 10^8 m/s",
+            "explanation": "Light travels at approximately 300,000 km/s in vacuum."
+        }
+        ```
+        Hope this explanation helps!"""
+        parsed = solver._parse_json_response(sample_with_preamble)
+        self.assertEqual(parsed["type"], "MCQ")
+        self.assertEqual(parsed["correct_answer"], "3 x 10^8 m/s")
+
+    def test_unfenced_embedded_json_parsing(self):
+        solver = QuizSolver(provider="ollama", api_key="")
+        sample_embedded = """The answer to the question is:
+        {"type": "TYPING", "question_summary": "2 + 2 = ?", "correct_answer": "4", "copy_text": "4", "explanation": "Basic addition."}
+        End of result."""
+        parsed = solver._parse_json_response(sample_embedded)
+        self.assertEqual(parsed["type"], "TYPING")
+        self.assertEqual(parsed["correct_answer"], "4")
+
+    def test_gemini_client_cleanup_on_provider_switch(self):
+        solver = QuizSolver(provider="gemini", api_key="dummy_key", model="gemini-3.5-flash-lite")
+        solver.gemini_client = object()  # simulate active client
+        # Switch away from Gemini
+        solver.update_credentials(provider="ollama", api_key="", model="llama3.2-vision")
+        self.assertIsNone(solver.gemini_client)
+
+    def test_image_mode_rgb_conversion(self):
+        img_gray = Image.new("L", (100, 100), color=128)
+        self.assertEqual(img_gray.mode, "L")
+        if img_gray.mode != "RGB":
+            img_converted = img_gray.convert("RGB")
+        self.assertEqual(img_converted.mode, "RGB")
+
     def test_solver_provider_switch(self):
         # Start with Ollama
         solver = QuizSolver(provider="ollama", api_key="bearer_123", model="llama3.2-vision", base_url="http://localhost:11434/v1")

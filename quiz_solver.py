@@ -66,6 +66,8 @@ class QuizSolver:
 
         if self.provider == "gemini" and self.api_key:
             self._init_gemini()
+        else:
+            self.gemini_client = None
 
     def _init_gemini(self):
         try:
@@ -101,6 +103,8 @@ class QuizSolver:
 
         if self.provider == "gemini" and self.api_key:
             self._init_gemini()
+        else:
+            self.gemini_client = None
 
     def test_connection(self) -> tuple[bool, str]:
         """Verify API key/server connectivity for the selected provider."""
@@ -277,7 +281,7 @@ class QuizSolver:
     def solve_question(self, pil_image: Image.Image) -> dict:
         """Analyze image, classify question, and return structured answer."""
         # Convert image to RGB
-        if pil_image.mode not in ("RGB", "L"):
+        if pil_image.mode != "RGB":
             pil_image = pil_image.convert("RGB")
 
         # Performance optimization: Downscale oversized images to max 1024px
@@ -462,8 +466,6 @@ class QuizSolver:
 
         except Exception as e:
             return {"success": False, "error": f"Ollama error: {str(e)[:80]}"}
-        except Exception as e:
-            return {"success": False, "error": f"Ollama error: {str(e)[:80]}"}
 
     def _solve_qwen(self, pil_image: Image.Image) -> dict:
         """Solve using Qwen Vision (DashScope / OpenAI-compatible endpoint)."""
@@ -592,25 +594,40 @@ class QuizSolver:
 
     def _parse_json_response(self, text: str) -> dict:
         """Clean and extract structured data from model output."""
-        text = text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        elif text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+        cleaned = text.strip()
+        # 1. Check if model wrapped JSON in markdown code blocks anywhere in text
+        fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
+        candidate = fence_match.group(1).strip() if fence_match else cleaned
+
+        # Strip remaining backticks if any
+        if candidate.startswith("```json"):
+            candidate = candidate[7:]
+        elif candidate.startswith("```"):
+            candidate = candidate[3:]
+        if candidate.endswith("```"):
+            candidate = candidate[:-3]
+        candidate = candidate.strip()
 
         try:
-            return json.loads(text)
+            return json.loads(candidate)
         except json.JSONDecodeError:
-            type_match = re.search(r'"type"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
-            ans_match = re.search(r'"correct_answer"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
-            copy_match = re.search(r'"copy_text"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
-            expl_match = re.search(r'"explanation"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
-            summ_match = re.search(r'"question_summary"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
+            # 2. Try extracting the outer-most JSON object {...}
+            try:
+                first_brace = cleaned.find("{")
+                last_brace = cleaned.rfind("}")
+                if first_brace != -1 and last_brace > first_brace:
+                    return json.loads(cleaned[first_brace:last_brace + 1])
+            except Exception:
+                pass
 
-            ans = ans_match.group(1) if ans_match else text[:100]
+            # 3. Fallback to resilient regex field extraction
+            type_match = re.search(r'"type"\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE)
+            ans_match = re.search(r'"correct_answer"\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE)
+            copy_match = re.search(r'"copy_text"\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE)
+            expl_match = re.search(r'"explanation"\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE)
+            summ_match = re.search(r'"question_summary"\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE)
+
+            ans = ans_match.group(1) if ans_match else cleaned[:100]
             copy_txt = copy_match.group(1) if copy_match else ans
 
             return {

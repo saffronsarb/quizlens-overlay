@@ -17,7 +17,7 @@ from PIL import Image
 
 from config_manager import load_config, save_config
 from quiz_solver import QuizSolver
-from screen_capture import capture_fullscreen, capture_region, capture_from_clipboard, SnipSelector
+from screen_capture import capture_fullscreen, capture_region, capture_from_clipboard, SnipSelector, make_window_invisible_to_capture
 
 # Attempt to import pynput for global hotkeys
 try:
@@ -37,6 +37,8 @@ CHROMA_KEY = "#000001"
 
 def set_windows_clipboard(text: str) -> bool:
     """Set Windows system clipboard directly via Win32 API for rock-solid reliability across all apps."""
+    if os.name != "nt":
+        return False
     try:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
@@ -227,11 +229,9 @@ class QuizOverlayApp:
                 user32.SetWindowLongW(win_hwnd, GWL_EXSTYLE, w_style)
                 user32.SetWindowPos(win_hwnd, 0, 0, 0, 0, 0, flags)
 
-                # Exclude overlay from screen recordings and screen shares (OBS, Zoom, Discord, Meet)
-                try:
-                    user32.SetWindowDisplayAffinity(win_hwnd, 0x00000011)  # WDA_EXCLUDEFROMCAPTURE
-                except Exception:
-                    pass
+                # Exclude overlay from screen recordings and screen shares (OBS, Zoom, Discord, Meet, Teams)
+                make_window_invisible_to_capture(self.win)
+                make_window_invisible_to_capture(self.root)
         except Exception as e:
             print(f"Taskbar removal warning: {e}")
 
@@ -252,6 +252,7 @@ class QuizOverlayApp:
                 pass
             self.win.configure(bg=self.COLOR_BG)
             self.win.attributes("-alpha", alpha)
+        make_window_invisible_to_capture(self.win)
 
     def _build_ui(self):
         """Construct the pure square answer HUD with zero clutter."""
@@ -411,7 +412,7 @@ class QuizOverlayApp:
         self.context_menu.add_command(label="📄 Copy Explanation Only (2nd Paragraph) (Ctrl+2)", command=self._copy_explanation_to_clipboard)
         self.context_menu.add_command(label="✂ Copy Selection (if highlighted)", command=self._copy_selection_or_full)
         self.context_menu.add_separator()
-        self.context_menu.add_command(label="🖥 Solve Fullscreen", command=self._solve_fullscreen)
+        self.context_menu.add_command(label="🖥 Solve Fullscreen (Alt+F)", command=self._solve_fullscreen)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="◀ Previous Answer (Ctrl+←)", command=self._history_prev)
         self.context_menu.add_command(label="▶ Next Answer (Ctrl+→)", command=self._history_next)
@@ -457,6 +458,10 @@ class QuizOverlayApp:
             "<Control-E>": _wrap(self._copy_explanation_to_clipboard),
             "<Alt-s>": _wrap(self._start_snip),
             "<Alt-S>": _wrap(self._start_snip),
+            "<Alt-f>": _wrap(self._solve_fullscreen),
+            "<Alt-F>": _wrap(self._solve_fullscreen),
+            "<Control-f>": _wrap(self._solve_fullscreen),
+            "<Control-F>": _wrap(self._solve_fullscreen),
             "<Escape>": _wrap(self.quit),
             "<Control-bracketleft>": _wrap(lambda: self._adjust_opacity(-0.04)),
             "<Control-bracketright>": _wrap(lambda: self._adjust_opacity(+0.04)),
@@ -466,8 +471,10 @@ class QuizOverlayApp:
             "<Control-Right>": _wrap(self._history_next),
             "<Control-plus>": _wrap(lambda: self._adjust_font_size(+1)),
             "<Control-equal>": _wrap(lambda: self._adjust_font_size(+1)),
+            "<Control-KP_Add>": _wrap(lambda: self._adjust_font_size(+1)),
             "<Control-minus>": _wrap(lambda: self._adjust_font_size(-1)),
             "<Control-underscore>": _wrap(lambda: self._adjust_font_size(-1)),
+            "<Control-KP_Subtract>": _wrap(lambda: self._adjust_font_size(-1)),
             "<Control-0>": _wrap(self._reset_font_size),
             "<Control-Key-0>": _wrap(self._reset_font_size),
             "<Control-t>": _wrap(self._toggle_click_through),
@@ -677,8 +684,12 @@ class QuizOverlayApp:
             def hotkey_settings():
                 self.root.after(0, self._open_settings)
 
+            def hotkey_fullscreen():
+                self.root.after(0, self._solve_fullscreen)
+
             hotkeys = {
                 '<ctrl>+<alt>+s': hotkey_snip,
+                '<ctrl>+<alt>+f': hotkey_fullscreen,
                 '<ctrl>+<alt>+c': hotkey_copy,
                 '<ctrl>+<alt>+a': hotkey_copy_all,
                 '<ctrl>+<alt>+e': hotkey_copy_expl,
@@ -941,6 +952,7 @@ class QuizOverlayApp:
 
     def _show_error(self, message: str):
         self.is_solving = False
+        self.last_full_text = message
         self.lbl_status.config(text=" ⠇Error")
         self.txt_answer.delete("1.0", "end")
         self.txt_answer.insert("1.0", message)
@@ -1012,9 +1024,12 @@ class QuizOverlayApp:
                 self.hotkey_listener.stop()
         except Exception:
             pass
-        self.config["window_x"] = self.win.winfo_x()
-        self.config["window_y"] = self.win.winfo_y()
-        save_config(self.config)
+        cur_x = self.win.winfo_x()
+        cur_y = self.win.winfo_y()
+        if cur_x > -1000 and cur_y > -1000:
+            self.config["window_x"] = cur_x
+            self.config["window_y"] = cur_y
+            save_config(self.config)
         try:
             self.win.destroy()
         except Exception:
@@ -1042,6 +1057,7 @@ class SettingsDialog:
         self.win.configure(bg="#18181B")
         self.win.resizable(False, False)
         self.win.attributes("-topmost", True)
+        make_window_invisible_to_capture(self.win)
         self.win.grab_set()
 
         # Title
